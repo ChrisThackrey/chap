@@ -13,11 +13,11 @@ import { geocodeAddress } from './geocoding';
  * Validation configuration
  */
 const VALIDATION_CONFIG = {
-  INITIAL_RADIUS: 2000, // 2km initial search radius
-  EXPANDED_RADIUS: 5000, // 5km fallback radius
+  INITIAL_RADIUS: 16093, // 10 miles initial search radius (in meters)
+  EXPANDED_RADIUS: 96561, // 60 miles fallback radius (in meters)
   MIN_RATING: 7.0, // Prefer venues with rating >= 7.0
-  MAX_DISTANCE_KM: 5.0, // Maximum acceptable distance from ideal location
-  SEARCH_LIMIT: 10, // Number of results to fetch per search
+  MAX_DISTANCE_KM: 96.5, // Maximum acceptable distance from location (60 miles)
+  SEARCH_LIMIT: 20, // Number of results to fetch per search (increased for wider area)
 };
 
 /**

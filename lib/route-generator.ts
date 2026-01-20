@@ -3,17 +3,27 @@ import { validateAndEnrichStops } from './venue-validator';
 import { Route, RouteStop, UserLocation } from '@/types/route';
 import uuid from 'react-native-uuid';
 
+export interface RouteGenerationOptions {
+  userLocation?: UserLocation;
+  locationContext?: string; // City, state, zip code context
+}
+
 export async function generateRoute(
   prompt: string,
-  userLocation?: UserLocation
+  options?: RouteGenerationOptions
 ): Promise<Route> {
-  const locationContext = userLocation
+  const userLocation = options?.userLocation;
+  const locationContext = options?.locationContext;
+
+  const locationPrompt = locationContext
+    ? `The user is in ${locationContext}. Plan the date route within this area (60-mile radius).`
+    : userLocation
     ? `User is located at ${userLocation.latitude}, ${userLocation.longitude}.`
     : '';
 
   const systemPrompt = `You are a date planning expert. Generate a romantic date route with 3-7 stops based on the user's description.
 
-${locationContext}
+${locationPrompt}
 
 Each stop must include:
 - name: Descriptive name for the type of venue (e.g., "Romantic Italian Restaurant", "Cozy Coffee Shop", "Waterfront Park")

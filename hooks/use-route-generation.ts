@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { generateRoute } from '@/lib/route-generator';
-import { Route, UserLocation } from '@/types/route';
+import { generateRoute, RouteGenerationOptions } from '@/lib/route-generator';
+import { Route } from '@/types/route';
 
 type GenerationState = 'idle' | 'loading' | 'success' | 'error';
 
@@ -9,12 +9,12 @@ export function useRouteGeneration() {
   const [route, setRoute] = useState<Route | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const generate = async (prompt: string, userLocation?: UserLocation) => {
+  const generate = async (prompt: string, options?: RouteGenerationOptions) => {
     setState('loading');
     setError(null);
 
     try {
-      const result = await generateRoute(prompt, userLocation);
+      const result = await generateRoute(prompt, options);
       setRoute(result);
       setState('success');
     } catch (err) {
