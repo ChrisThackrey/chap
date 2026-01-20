@@ -1,3 +1,5 @@
-declare module '@env' {
-  export const OPENAI_API_KEY: string;
+declare namespace NodeJS {
+  interface ProcessEnv {
+    EXPO_PUBLIC_OPENAI_API_KEY: string;
+  }
 }

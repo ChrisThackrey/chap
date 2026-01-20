@@ -17,6 +17,12 @@ export default function TabLayout() {
         tabBarButton: HapticTab,
       }}>
       <Tabs.Screen
+        name="index"
+        options={{
+          href: null,
+        }}
+      />
+      <Tabs.Screen
         name="route-planner"
         options={{
           title: 'Plan Date',
