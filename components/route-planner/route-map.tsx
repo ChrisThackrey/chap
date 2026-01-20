@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { View, StyleSheet, TouchableOpacity } from 'react-native';
 import MapLibreGL from '@maplibre/maplibre-react-native';
 import { ThemedText } from '@/components/themed-text';
@@ -16,6 +16,7 @@ interface RouteMapProps {
 export function RouteMap({ route }: RouteMapProps) {
   const [selectedStop, setSelectedStop] = useState<RouteStop | null>(null);
   const colorScheme = useColorScheme();
+  const cameraRef = useRef<any>(null);
 
   // Calculate map bounds from route stops
   const bounds = useMemo(() => {
@@ -49,6 +50,23 @@ export function RouteMap({ route }: RouteMapProps) {
       ? 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
       : 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json'; // More detailed map
 
+  // Auto-fit map to route bounds when route changes
+  useEffect(() => {
+    if (route.stops.length > 0 && cameraRef.current) {
+      // Small delay to ensure map is ready
+      const timer = setTimeout(() => {
+        cameraRef.current?.fitBounds(
+          [bounds.minLng, bounds.minLat], // SW corner
+          [bounds.maxLng, bounds.maxLat], // NE corner
+          [80, 80, 80, 80], // Padding [top, right, bottom, left]
+          1000 // Animation duration
+        );
+      }, 100);
+
+      return () => clearTimeout(timer);
+    }
+  }, [route.stops.length, bounds]);
+
   return (
     <View style={styles.container}>
       <MapLibreGL.MapView
@@ -68,6 +86,7 @@ export function RouteMap({ route }: RouteMapProps) {
         zoomEnabled={true}
       >
         <MapLibreGL.Camera
+          ref={cameraRef}
           defaultSettings={{
             centerCoordinate: [center.longitude, center.latitude],
             zoomLevel: 13,
