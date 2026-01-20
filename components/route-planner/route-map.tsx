@@ -44,28 +44,43 @@ export function RouteMap({ route }: RouteMapProps) {
     return route.stops.map((stop) => [stop.longitude, stop.latitude]);
   }, [route.stops]);
 
-  // Use detailed Voyager basemap for better visual features
+  // Use highly detailed OpenStreetMap-based basemap with real-world features
   const mapStyle =
     colorScheme === 'dark'
       ? 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
-      : 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json'; // More detailed map
+      : 'https://tiles.openfreemap.org/styles/liberty'; // OpenStreetMap with maximum real-world detail
 
   // Auto-fit map to route bounds when route changes
   useEffect(() => {
     if (route.stops.length > 0 && cameraRef.current) {
       // Small delay to ensure map is ready
       const timer = setTimeout(() => {
-        cameraRef.current?.fitBounds(
-          [bounds.minLng, bounds.minLat], // SW corner
-          [bounds.maxLng, bounds.maxLat], // NE corner
-          [80, 80, 80, 80], // Padding [top, right, bottom, left]
-          1000 // Animation duration
-        );
+        fitBounds();
       }, 100);
 
       return () => clearTimeout(timer);
     }
   }, [route.stops.length, bounds]);
+
+  // Fit bounds to show all stops
+  const fitBounds = () => {
+    cameraRef.current?.fitBounds(
+      [bounds.minLng, bounds.minLat], // SW corner
+      [bounds.maxLng, bounds.maxLat], // NE corner
+      [80, 80, 80, 80], // Padding [top, right, bottom, left]
+      1000 // Animation duration
+    );
+  };
+
+  // Zoom in
+  const zoomIn = () => {
+    cameraRef.current?.zoomTo(15, 500);
+  };
+
+  // Zoom out
+  const zoomOut = () => {
+    cameraRef.current?.zoomTo(11, 500);
+  };
 
   return (
     <View style={styles.container}>
@@ -157,6 +172,27 @@ export function RouteMap({ route }: RouteMapProps) {
         ))}
       </MapLibreGL.MapView>
 
+      {/* Map Controls */}
+      <View style={styles.mapControls}>
+        {/* Zoom Extents Button */}
+        <TouchableOpacity
+          style={[styles.controlButton, styles.extentsButton]}
+          onPress={fitBounds}
+        >
+          <ThemedText style={styles.controlButtonText}>⊡</ThemedText>
+        </TouchableOpacity>
+
+        {/* Zoom In Button */}
+        <TouchableOpacity style={styles.controlButton} onPress={zoomIn}>
+          <ThemedText style={styles.controlButtonText}>+</ThemedText>
+        </TouchableOpacity>
+
+        {/* Zoom Out Button */}
+        <TouchableOpacity style={styles.controlButton} onPress={zoomOut}>
+          <ThemedText style={styles.controlButtonText}>−</ThemedText>
+        </TouchableOpacity>
+      </View>
+
       {/* Stop detail modal */}
       <StopDetailModal
         stop={selectedStop}
@@ -174,5 +210,33 @@ const styles = StyleSheet.create({
   },
   map: {
     flex: 1,
+  },
+  mapControls: {
+    position: 'absolute',
+    right: 16,
+    top: '50%',
+    transform: [{ translateY: -60 }],
+    gap: 8,
+  },
+  controlButton: {
+    width: 44,
+    height: 44,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  extentsButton: {
+    marginBottom: 8,
+  },
+  controlButtonText: {
+    fontSize: 24,
+    fontWeight: '600',
+    color: '#000000',
   },
 });

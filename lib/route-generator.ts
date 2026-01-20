@@ -1,5 +1,5 @@
 import { openai, MODEL } from './openai';
-import { validateAndEnrichStops } from './venue-validator';
+import { enrichWithRealVenues } from './web-venue-search';
 import { Route, RouteStop, UserLocation } from '@/types/route';
 import uuid from 'react-native-uuid';
 
@@ -90,13 +90,13 @@ Consider flow, timing, variety, and geographic proximity. Ensure realistic timin
 
   const routeData = JSON.parse(response.choices[0].message.content || '{}');
 
-  // Validate and enrich stops with real venue data
-  const validatedStops = await validateAndEnrichStops(routeData.stops, userLocation);
+  // Enrich stops with real San Antonio venue data using web search
+  const realVenues = await enrichWithRealVenues(routeData.stops);
 
   return {
     id: String(uuid.v4()),
     title: routeData.title,
-    stops: validatedStops,
+    stops: realVenues,
     createdAt: new Date().toISOString(),
   };
 }
