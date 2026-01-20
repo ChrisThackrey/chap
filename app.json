@@ -9,7 +9,12 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "We need your location to suggest date spots near you.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "bundleIdentifier": "com.thacken5.chap"
     },
     "android": {
       "adaptiveIcon": {
@@ -19,7 +24,11 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "output": "static",
@@ -38,11 +47,18 @@
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      "@maplibre/maplibre-react-native"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "fb49c8e3-8992-431c-81ed-7ad9ff937bc9"
+      }
     }
   }
 }
