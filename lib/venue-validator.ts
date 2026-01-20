@@ -34,7 +34,7 @@ export async function validateAndEnrichStops(
   // If Foursquare is not configured, fall back to geocoding only
   if (!isFoursquareConfigured()) {
     console.warn('Foursquare API not configured, falling back to basic geocoding');
-    return await fallbackToGeocoding(stops);
+    return await fallbackToGeocoding(stops, userLocation);
   }
 
   const validatedStops: RouteStop[] = [];
@@ -46,7 +46,7 @@ export async function validateAndEnrichStops(
     } catch (error) {
       console.error(`Error validating stop ${stop.name}:`, error);
       // Fall back to geocoding for this stop
-      const fallbackStop = await validateStopWithGeocoding(stop);
+      const fallbackStop = await validateStopWithGeocoding(stop, userLocation);
       validatedStops.push(fallbackStop);
     }
   }
@@ -65,19 +65,19 @@ async function validateStop(
     throw new Error('Invalid stop: missing required fields');
   }
 
-  // Strategy 1: Search by name and description near the address location
-  let venues = await searchByNameAndDescription(stop);
+  // Strategy 1: Search by name and description near the user location
+  let venues = await searchByNameAndDescription(stop, userLocation);
 
   // Strategy 2: If no results, search by type only
   if (venues.length === 0) {
     console.log(`No venues found for ${stop.name}, trying type-only search`);
-    venues = await searchByTypeOnly(stop);
+    venues = await searchByTypeOnly(stop, userLocation);
   }
 
   // Strategy 3: If still no results, expand radius
   if (venues.length === 0) {
     console.log(`Still no venues found for ${stop.name}, expanding search radius`);
-    venues = await searchWithExpandedRadius(stop);
+    venues = await searchWithExpandedRadius(stop, userLocation);
   }
 
   // Select best venue from results
@@ -107,17 +107,40 @@ async function validateStop(
 
   // Fallback: Use AI suggestion with geocoding
   console.log(`No suitable venue found for ${stop.name}, using AI suggestion`);
-  return await validateStopWithGeocoding(stop);
+  return await validateStopWithGeocoding(stop, userLocation);
+}
+
+/**
+ * Get search center location (use user location if available)
+ */
+async function getSearchCenter(
+  stop: Partial<RouteStop>,
+  userLocation?: UserLocation
+): Promise<{ latitude: number; longitude: number }> {
+  // Prefer user location if available
+  if (userLocation) {
+    return userLocation;
+  }
+
+  // Fall back to geocoding the address
+  try {
+    return await geocodeAddress(stop.address!);
+  } catch (error) {
+    console.warn(`Could not geocode ${stop.address}, using San Francisco as default`);
+    // Default to San Francisco
+    return { latitude: 37.7749, longitude: -122.4194 };
+  }
 }
 
 /**
  * Search venues by name and description
  */
 async function searchByNameAndDescription(
-  stop: Partial<RouteStop>
+  stop: Partial<RouteStop>,
+  userLocation?: UserLocation
 ): Promise<any[]> {
-  // Get approximate location from address
-  const location = await geocodeAddress(stop.address!);
+  // Get search center location
+  const location = await getSearchCenter(stop, userLocation);
 
   // Build search query from name and description
   const searchQuery = buildSearchQuery(stop);
@@ -135,8 +158,11 @@ async function searchByNameAndDescription(
 /**
  * Search venues by type only (more general search)
  */
-async function searchByTypeOnly(stop: Partial<RouteStop>): Promise<any[]> {
-  const location = await geocodeAddress(stop.address!);
+async function searchByTypeOnly(
+  stop: Partial<RouteStop>,
+  userLocation?: UserLocation
+): Promise<any[]> {
+  const location = await getSearchCenter(stop, userLocation);
 
   return await searchVenuesByType(
     stop.type!,
@@ -150,8 +176,11 @@ async function searchByTypeOnly(stop: Partial<RouteStop>): Promise<any[]> {
 /**
  * Search with expanded radius as last resort
  */
-async function searchWithExpandedRadius(stop: Partial<RouteStop>): Promise<any[]> {
-  const location = await geocodeAddress(stop.address!);
+async function searchWithExpandedRadius(
+  stop: Partial<RouteStop>,
+  userLocation?: UserLocation
+): Promise<any[]> {
+  const location = await getSearchCenter(stop, userLocation);
 
   return await searchVenuesByType(
     stop.type!,
@@ -312,13 +341,23 @@ function calculateNameSimilarity(name1: string, name2: string): number {
  * Validate stop using geocoding only (fallback)
  */
 async function validateStopWithGeocoding(
-  stop: Partial<RouteStop>
+  stop: Partial<RouteStop>,
+  userLocation?: UserLocation
 ): Promise<RouteStop> {
   if (!stop.name || !stop.type || !stop.address) {
     throw new Error('Invalid stop: missing required fields');
   }
 
-  const location = await geocodeAddress(stop.address);
+  let location: { latitude: number; longitude: number };
+
+  try {
+    // Try to geocode the address
+    location = await geocodeAddress(stop.address);
+  } catch (error) {
+    console.warn(`Geocoding failed for ${stop.address}, using fallback location`);
+    // Use user location or default to San Francisco
+    location = userLocation || { latitude: 37.7749, longitude: -122.4194 };
+  }
 
   return {
     name: stop.name,
@@ -337,13 +376,14 @@ async function validateStopWithGeocoding(
  * Fall back to geocoding for all stops (when Foursquare is not configured)
  */
 async function fallbackToGeocoding(
-  stops: Partial<RouteStop>[]
+  stops: Partial<RouteStop>[],
+  userLocation?: UserLocation
 ): Promise<RouteStop[]> {
   const validatedStops: RouteStop[] = [];
 
   for (const stop of stops) {
     try {
-      const validatedStop = await validateStopWithGeocoding(stop);
+      const validatedStop = await validateStopWithGeocoding(stop, userLocation);
       validatedStops.push(validatedStop);
     } catch (error) {
       console.error(`Error geocoding stop ${stop.name}:`, error);

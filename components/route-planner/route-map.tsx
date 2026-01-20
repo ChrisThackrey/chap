@@ -43,11 +43,11 @@ export function RouteMap({ route }: RouteMapProps) {
     return route.stops.map((stop) => [stop.longitude, stop.latitude]);
   }, [route.stops]);
 
-  // CARTO basemap style URLs
+  // Use detailed Voyager basemap for better visual features
   const mapStyle =
     colorScheme === 'dark'
       ? 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
-      : 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json';
+      : 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json'; // More detailed map
 
   return (
     <View style={styles.container}>
@@ -55,12 +55,25 @@ export function RouteMap({ route }: RouteMapProps) {
         style={styles.map}
         styleURL={mapStyle}
         logoEnabled={false}
+        compassEnabled={true}
+        compassViewPosition={3}
+        compassViewMargins={{ x: 16, y: 100 }}
+        scaleBarEnabled={true}
+        scaleBarPosition={{ bottom: 80, left: 16 }}
+        attributionEnabled={true}
+        attributionPosition={{ bottom: 8, right: 8 }}
+        rotateEnabled={true}
+        scrollEnabled={true}
+        pitchEnabled={true}
+        zoomEnabled={true}
       >
         <MapLibreGL.Camera
-          zoomLevel={12}
+          zoomLevel={13}
           centerCoordinate={[center.longitude, center.latitude]}
           animationMode="flyTo"
           animationDuration={1000}
+          minZoomLevel={10}
+          maxZoomLevel={18}
         />
 
         {/* Route line */}
@@ -75,12 +88,36 @@ export function RouteMap({ route }: RouteMapProps) {
             },
           }}
         >
+          {/* Route line outline (shadow effect) */}
+          <MapLibreGL.LineLayer
+            id="routeLineOutline"
+            style={{
+              lineColor: colorScheme === 'dark' ? '#000000' : '#FFFFFF',
+              lineWidth: 8,
+              lineOpacity: 0.3,
+              lineBlur: 2,
+            }}
+            belowLayerID="routeLine"
+          />
+          {/* Main route line */}
           <MapLibreGL.LineLayer
             id="routeLine"
             style={{
-              lineColor: colorScheme === 'dark' ? '#FFFFFF' : '#0a7ea4',
-              lineWidth: 4,
-              lineOpacity: 0.8,
+              lineColor: colorScheme === 'dark' ? '#FF6B6B' : '#0a7ea4',
+              lineWidth: 5,
+              lineOpacity: 0.9,
+              lineCap: 'round',
+              lineJoin: 'round',
+            }}
+          />
+          {/* Route line with dashes for visual interest */}
+          <MapLibreGL.LineLayer
+            id="routeLineDash"
+            style={{
+              lineColor: colorScheme === 'dark' ? '#FFFFFF' : '#FFFFFF',
+              lineWidth: 2,
+              lineOpacity: 0.4,
+              lineDasharray: [2, 4],
             }}
           />
         </MapLibreGL.ShapeSource>
