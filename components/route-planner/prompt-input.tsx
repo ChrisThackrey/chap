@@ -51,6 +51,11 @@ export function PromptInput({ onGenerate, loading = false }: PromptInputProps) {
         numberOfLines={4}
         maxLength={maxCharacters}
         editable={!loading}
+        textContentType="none"
+        autoCorrect={false}
+        autoCapitalize="sentences"
+        spellCheck={true}
+        contextMenuHidden={false}
       />
 
       <ThemedText style={styles.charCount}>

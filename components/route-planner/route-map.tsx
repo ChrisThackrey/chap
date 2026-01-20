@@ -68,10 +68,12 @@ export function RouteMap({ route }: RouteMapProps) {
         zoomEnabled={true}
       >
         <MapLibreGL.Camera
-          zoomLevel={13}
-          centerCoordinate={[center.longitude, center.latitude]}
-          animationMode="flyTo"
-          animationDuration={1000}
+          defaultSettings={{
+            centerCoordinate: [center.longitude, center.latitude],
+            zoomLevel: 13,
+            animationMode: "flyTo",
+            animationDuration: 1000,
+          }}
           minZoomLevel={10}
           maxZoomLevel={18}
         />
