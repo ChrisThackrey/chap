@@ -1,5 +1,5 @@
 import { openai, MODEL } from './openai';
-import { geocodeStops } from './geocoding';
+import { validateAndEnrichStops } from './venue-validator';
 import { Route, RouteStop, UserLocation } from '@/types/route';
 import uuid from 'react-native-uuid';
 
@@ -16,13 +16,14 @@ export async function generateRoute(
 ${locationContext}
 
 Each stop must include:
-- name: Specific venue name (real place)
+- name: Descriptive name for the type of venue (e.g., "Romantic Italian Restaurant", "Cozy Coffee Shop", "Waterfront Park")
 - type: restaurant | cafe | bar | park | museum | theater | viewpoint | activity | shopping
-- description: 2-3 sentences explaining why this stop fits the date
-- address: Full street address with city and state
+- description: 2-3 sentences describing the ideal characteristics and atmosphere of this venue
+- address: Neighborhood or area description (e.g., "downtown", "waterfront district", "historic district")
 - duration: Estimated time in minutes
 - order: Sequential number (1-based)
 
+Focus on the CHARACTERISTICS and ATMOSPHERE rather than specific venue names. Describe what makes the ideal venue special.
 Consider flow, timing, variety, and geographic proximity. Ensure realistic timing and that stops are geographically logical.`;
 
   const response = await openai.chat.completions.create({
@@ -79,13 +80,13 @@ Consider flow, timing, variety, and geographic proximity. Ensure realistic timin
 
   const routeData = JSON.parse(response.choices[0].message.content || '{}');
 
-  // Geocode addresses to coordinates
-  const stopsWithCoords = await geocodeStops(routeData.stops);
+  // Validate and enrich stops with real venue data
+  const validatedStops = await validateAndEnrichStops(routeData.stops, userLocation);
 
   return {
     id: String(uuid.v4()),
     title: routeData.title,
-    stops: stopsWithCoords,
+    stops: validatedStops,
     createdAt: new Date().toISOString(),
   };
 }

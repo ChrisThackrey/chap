@@ -10,10 +10,10 @@ interface LoadingStateProps {
 }
 
 const LOADING_MESSAGES = [
-  'Planning your date...',
-  'Finding perfect spots...',
-  'Discovering hidden gems...',
-  'Creating memories...',
+  'Crafting your perfect date route...',
+  'Finding the best venues nearby...',
+  'Gathering venue details...',
+  'Finalizing your route...',
 ];
 
 export function LoadingState({ onCancel }: LoadingStateProps) {

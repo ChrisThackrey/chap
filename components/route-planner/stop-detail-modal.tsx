@@ -1,4 +1,4 @@
-import { Modal, View, TouchableOpacity, StyleSheet, Linking, Platform } from 'react-native';
+import { Modal, View, TouchableOpacity, StyleSheet, Linking, Platform, ScrollView } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -6,6 +6,10 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors } from '@/constants/theme';
 import { RouteStop } from '@/types/route';
 import { getStopIcon } from '@/constants/stop-icons';
+import { VenueRating } from './venue-rating';
+import { PhotoCarousel } from './photo-carousel';
+import { VenueHours } from './venue-hours';
+import { VenueTips } from './venue-tips';
 
 interface StopDetailModalProps {
   stop: RouteStop | null;
@@ -69,39 +73,72 @@ export function StopDetailModal({ stop, totalStops, visible, onClose }: StopDeta
             </View>
 
             {/* Content */}
-            <View style={styles.content}>
-              <ThemedText type="title" style={styles.title}>
-                {stop.name}
-              </ThemedText>
-
-              <ThemedText style={styles.subtitle}>
-                Stop {stop.order} of {totalStops} • {stop.type}
-              </ThemedText>
-
-              <View style={styles.durationContainer}>
-                <ThemedText style={styles.duration}>
-                  ⏱️ {stop.duration} minutes
+            <ScrollView
+              style={styles.scrollView}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.content}>
+                <ThemedText type="title" style={styles.title}>
+                  {stop.name}
                 </ThemedText>
-              </View>
 
-              <ThemedText style={styles.description}>
-                {stop.description}
-              </ThemedText>
-
-              <View style={styles.addressContainer}>
-                <ThemedText style={styles.addressLabel}>📍 Address:</ThemedText>
-                <ThemedText style={styles.address}>{stop.address}</ThemedText>
-              </View>
-
-              <TouchableOpacity
-                style={[styles.directionsButton, { backgroundColor: colors.tint }]}
-                onPress={handleGetDirections}
-              >
-                <ThemedText style={styles.directionsButtonText}>
-                  Get Directions
+                <ThemedText style={styles.subtitle}>
+                  Stop {stop.order} of {totalStops} • {stop.type}
                 </ThemedText>
-              </TouchableOpacity>
-            </View>
+
+                {/* Venue Rating & Info */}
+                {stop.venueDetails && (
+                  <VenueRating
+                    rating={stop.venueDetails.rating}
+                    ratingColor={stop.venueDetails.ratingColor}
+                    price={stop.venueDetails.price}
+                    verified={stop.venueDetails.verified}
+                  />
+                )}
+
+                <View style={styles.durationContainer}>
+                  <ThemedText style={styles.duration}>
+                    ⏱️ {stop.duration} minutes
+                  </ThemedText>
+                </View>
+
+                <ThemedText style={styles.description}>
+                  {stop.description}
+                </ThemedText>
+
+                {/* Venue Photos */}
+                {stop.venueDetails?.photos && (
+                  <PhotoCarousel photos={stop.venueDetails.photos} />
+                )}
+
+                <View style={styles.addressContainer}>
+                  <ThemedText style={styles.addressLabel}>📍 Address:</ThemedText>
+                  <ThemedText style={styles.address}>{stop.address}</ThemedText>
+
+                  {/* Venue Hours */}
+                  {stop.venueDetails && (
+                    <VenueHours
+                      hours={stop.venueDetails.hours}
+                      isOpen={stop.venueDetails.isOpen}
+                    />
+                  )}
+                </View>
+
+                {/* User Tips */}
+                {stop.venueDetails?.tips && (
+                  <VenueTips tips={stop.venueDetails.tips} />
+                )}
+
+                <TouchableOpacity
+                  style={[styles.directionsButton, { backgroundColor: colors.tint }]}
+                  onPress={handleGetDirections}
+                >
+                  <ThemedText style={styles.directionsButtonText}>
+                    Get Directions
+                  </ThemedText>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
           </ThemedView>
         </TouchableOpacity>
       </TouchableOpacity>
@@ -127,6 +164,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 4,
     elevation: 5,
+  },
+  scrollView: {
+    maxHeight: 500,
   },
   header: {
     flexDirection: 'row',
