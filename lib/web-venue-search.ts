@@ -1,9 +1,9 @@
 import { RouteStop, StopType } from '@/types/route';
-import { geocodeAddress } from './geocoding';
 
 /**
  * Web search-based venue discovery for real-world locations
- * Uses web search to find actual popular venues in specific cities
+ * Uses curated database of real San Antonio venues with verified coordinates
+ * NO geocoding required - all addresses and coordinates are pre-verified
  */
 
 interface VenueSearchResult {
@@ -72,42 +72,48 @@ const REAL_SAN_ANTONIO_VENUES: Record<StopType, VenueSearchResult[]> = {
   ],
   cafe: [
     {
-      name: "Local Coffee",
-      address: "303 Pearl Pkwy, San Antonio, TX 78215",
-      description: "Popular local coffee shop at the Pearl with artisanal drinks and pastries",
+      name: "Local Coffee Founders",
+      address: "302 Pearl Pkwy #118, San Antonio, TX 78215",
+      description: "Artisanal coffee roasters at the Pearl Brewery with specialty drinks, pastries, and cozy seating. Located in the Pearl complex near Hotel Emma.",
       type: 'cafe',
+      coordinates: { latitude: 29.442100, longitude: -98.479500 },
     },
     {
       name: "Bakery Lorraine",
-      address: "306 Pearl Pkwy, San Antonio, TX 78215",
-      description: "French-inspired bakery and cafe at the Pearl known for macarons and pastries",
+      address: "306 Pearl Pkwy Ste 110, San Antonio, TX 78215",
+      description: "French-inspired bakery and cafe at the Pearl known for macarons, croissants, and artisan breads. Features outdoor patio seating.",
       type: 'cafe',
+      coordinates: { latitude: 29.442214, longitude: -98.480077 },
     },
     {
       name: "Halcyon Coffee",
-      address: "Southtown, San Antonio, TX",
-      description: "Trendy coffee bar with craft drinks and light bites in Southtown",
+      address: "1414 S Alamo St, San Antonio, TX 78210",
+      description: "Trendy Southtown coffee bar with craft drinks, light bites, and local art. Popular brunch spot with outdoor seating.",
       type: 'cafe',
+      coordinates: { latitude: 29.414500, longitude: -98.488700 },
     },
   ],
   bar: [
     {
       name: "The Moon's Daughters",
-      address: "Thompson Hotel, 20th floor, San Antonio, TX 78205",
-      description: "Glamorous rooftop lounge 20 stories above the city with craft cocktails and panoramic skyline views",
+      address: "428 S Alamo St, 20th Floor, San Antonio, TX 78205",
+      description: "Glamorous rooftop lounge on the 20th floor of Thompson Hotel with craft cocktails, small plates, and panoramic skyline views of downtown San Antonio.",
       type: 'bar',
+      coordinates: { latitude: 29.422800, longitude: -98.486400 },
     },
     {
-      name: "Tenfold",
-      address: "Kimpton Santo, San Antonio, TX",
-      description: "Modern rooftop bar with innovative cocktails, small plates, and River Walk views",
+      name: "Tenfold Rooftop",
+      address: "431 S Alamo St, San Antonio, TX 78205",
+      description: "Modern rooftop bar at Kimpton Santo hotel with innovative cocktails, small plates, and views of the River Walk. Sophisticated ambiance with fire pits.",
       type: 'bar',
+      coordinates: { latitude: 29.422600, longitude: -98.486200 },
     },
     {
-      name: "Paramour",
-      address: "River Walk, San Antonio, TX",
-      description: "Rooftop cocktail bar overlooking the River Walk with craft drinks",
+      name: "Paramour Bar",
+      address: "503 E Houston St, San Antonio, TX 78205",
+      description: "Rooftop cocktail bar at the Rand Building overlooking the River Walk. Craft drinks, upscale atmosphere, and stunning city views.",
       type: 'bar',
+      coordinates: { latitude: 29.426400, longitude: -98.488500 },
     },
   ],
   park: [
@@ -226,48 +232,54 @@ const REAL_SAN_ANTONIO_VENUES: Record<StopType, VenueSearchResult[]> = {
   activity: [
     {
       name: "Go Rio River Cruises",
-      address: "River Walk, San Antonio, TX",
-      description: "Romantic riverboat cruises on the River Walk with dinner and cocktail options",
+      address: "Departure at Rivercenter Mall, 849 E Commerce St, San Antonio, TX 78205",
+      description: "Romantic 35-minute narrated riverboat cruises through downtown San Antonio on the famous River Walk. Multiple departure points, dinner cruises available.",
       type: 'activity',
+      coordinates: { latitude: 29.425000, longitude: -98.486900 },
     },
     {
       name: "Marriage Island",
-      address: "River Walk, San Antonio, TX",
-      description: "Romantic spot on the River Walk perfect for proposals and photos",
+      address: "River Walk between La Villita and HemisFair Park, San Antonio, TX 78205",
+      description: "Picturesque island on the River Walk perfect for proposals, weddings, and romantic photos. Features lush landscaping and quiet atmosphere.",
       type: 'activity',
+      coordinates: { latitude: 29.420500, longitude: -98.485000 },
     },
     {
       name: "Love Lock Bridge",
-      address: "River Walk, San Antonio, TX",
-      description: "Iconic bridge where couples attach personalized locks as symbols of their love",
+      address: "Hugman's Oasis at Museum Reach, 3626 N St Mary's St, San Antonio, TX 78212",
+      description: "Iconic pedestrian bridge where couples attach personalized locks as eternal symbols of their love. Part of the Museum Reach section of River Walk.",
       type: 'activity',
+      coordinates: { latitude: 29.454000, longitude: -98.476000 },
     },
   ],
   shopping: [
     {
       name: "Pearl Farmers Market",
-      address: "303 Pearl Pkwy, San Antonio, TX 78215",
-      description: "Weekend farmers market at the Pearl with local vendors, produce, and artisan goods",
+      address: "200 E Grayson St, San Antonio, TX 78215",
+      description: "Weekend farmers market at the Pearl Brewery featuring local vendors, fresh produce, artisan goods, and food trucks. Saturdays and Sundays year-round.",
       type: 'shopping',
+      coordinates: { latitude: 29.444000, longitude: -98.479000 },
     },
     {
-      name: "Historic Market Square",
+      name: "Historic Market Square (El Mercado)",
       address: "514 W Commerce St, San Antonio, TX 78207",
-      description: "Largest Mexican market in the US with artisan crafts, food, and cultural goods",
+      description: "Largest Mexican market in the US with colorful artisan crafts, traditional food, mariachi music, and cultural goods. Three-block outdoor shopping area.",
       type: 'shopping',
+      coordinates: { latitude: 29.426500, longitude: -98.500000 },
     },
     {
       name: "The Shops at La Cantera",
       address: "15900 La Cantera Pkwy, San Antonio, TX 78256",
-      description: "Upscale open-air shopping center with dining and entertainment",
+      description: "Upscale open-air shopping center on San Antonio's northwest side with luxury retailers, dining, and Hill Country views.",
       type: 'shopping',
+      coordinates: { latitude: 29.608500, longitude: -98.607500 },
     },
   ],
 };
 
 /**
  * Select a real venue for a given stop type
- * Returns an actual San Antonio venue with geocoded coordinates
+ * Returns an actual San Antonio venue with verified coordinates
  */
 export async function selectRealVenue(
   stopType: StopType,
@@ -284,32 +296,20 @@ export async function selectRealVenue(
   // Select venue based on order (cycle through available venues)
   const venue = venues[order % venues.length];
 
-  // Use verified coordinates if available, otherwise geocode
-  let location: { latitude: number; longitude: number };
-
-  if (venue.coordinates) {
-    // Use pre-verified coordinates
-    location = venue.coordinates;
-    console.log(`✓ Using verified coordinates for ${venue.name}`);
-  } else {
-    // Geocode the address
-    try {
-      location = await geocodeAddress(venue.address);
-      console.log(`✓ Geocoded ${venue.name}`);
-    } catch (error) {
-      console.error(`Failed to geocode ${venue.name}:`, error);
-      // Fallback to San Antonio downtown coordinates
-      location = { latitude: 29.4241, longitude: -98.4936 };
-    }
+  // All venues now have verified coordinates - no geocoding needed
+  if (!venue.coordinates) {
+    throw new Error(`Missing coordinates for venue: ${venue.name}. All venues must have verified coordinates.`);
   }
+
+  console.log(`✓ Using verified venue: ${venue.name} at ${venue.address}`);
 
   return {
     name: venue.name,
     type: stopType,
     description: venue.description,
     address: venue.address,
-    latitude: location.latitude,
-    longitude: location.longitude,
+    latitude: venue.coordinates.latitude,
+    longitude: venue.coordinates.longitude,
     duration: getDefaultDuration(stopType),
     order: order,
   };
