@@ -44,11 +44,12 @@ export function RouteMap({ route }: RouteMapProps) {
     return route.stops.map((stop) => [stop.longitude, stop.latitude]);
   }, [route.stops]);
 
-  // Use highly detailed OpenStreetMap-based basemap with real-world features
+  // Use detailed OSM basemap with real street names and landmarks
+  // OSM Liberty style has maximum detail for streets, buildings, and POIs
   const mapStyle =
     colorScheme === 'dark'
       ? 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
-      : 'https://tiles.openfreemap.org/styles/liberty'; // OpenStreetMap with maximum real-world detail
+      : 'https://demotiles.maplibre.org/style.json'; // Demo tiles with excellent street detail
 
   // Auto-fit map to route bounds when route changes
   useEffect(() => {

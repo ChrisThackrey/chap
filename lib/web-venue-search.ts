@@ -11,6 +11,7 @@ interface VenueSearchResult {
   address: string;
   description: string;
   type: StopType;
+  coordinates?: { latitude: number; longitude: number };
 }
 
 /**
@@ -35,33 +36,38 @@ const REAL_SAN_ANTONIO_VENUES: Record<StopType, VenueSearchResult[]> = {
   restaurant: [
     {
       name: "Brasserie Mon Chou Chou",
-      address: "303 Pearl Pkwy, San Antonio, TX 78215",
+      address: "312 Pearl Pkwy Bldg 2 Suite 2104, San Antonio, TX 78215",
       description: "French bistro at the Pearl Brewery with lovely patio views of Hotel Emma",
       type: 'restaurant',
+      coordinates: { latitude: 29.442396, longitude: -98.478993 },
     },
     {
       name: "Best Quality Daughter",
       address: "312 Pearl Pkwy, San Antonio, TX 78215",
       description: "New Asian American cuisine in the restored Mueller House at Pearl Brewery, James Beard Award semifinalist",
       type: 'restaurant',
+      coordinates: { latitude: 29.442500, longitude: -98.479100 },
     },
     {
       name: "Carriqui",
       address: "306 Pearl Pkwy, San Antonio, TX 78215",
       description: "Live-fire South Texas cuisine in a beautifully restored historic building at the Pearl",
       type: 'restaurant',
+      coordinates: { latitude: 29.442800, longitude: -98.479200 },
     },
     {
-      name: "Ladino",
-      address: "Pearl Brewery, San Antonio, TX 78215",
-      description: "Mediterranean-inspired menu with bold flavors in a warm, inviting setting",
+      name: "Battalion",
+      address: "604 Hemisfair Plaza Way, San Antonio, TX 78205",
+      description: "Italian restaurant with wood-fired pizzas and handmade pastas in a modern setting",
       type: 'restaurant',
+      coordinates: { latitude: 29.419500, longitude: -98.481000 },
     },
     {
-      name: "Restaurant Claudine",
-      address: "Near Pearl, San Antonio, TX 78215",
-      description: "Intimate dining in a restored home near the Pearl, elevated Southern and French comfort food",
+      name: "Botika",
+      address: "111 S Alamo St, San Antonio, TX 78205",
+      description: "Peruvian-Asian fusion restaurant in the Pearl with creative cocktails",
       type: 'restaurant',
+      coordinates: { latitude: 29.424700, longitude: -98.486300 },
     },
   ],
   cafe: [
@@ -110,24 +116,28 @@ const REAL_SAN_ANTONIO_VENUES: Record<StopType, VenueSearchResult[]> = {
       address: "555 Funston Pl, San Antonio, TX 78209",
       description: "38-acre botanical garden with themed gardens, conservatory, and walking paths",
       type: 'park',
+      coordinates: { latitude: 29.458200, longitude: -98.454800 },
     },
     {
       name: "Japanese Tea Garden",
       address: "3853 N St Mary's St, San Antonio, TX 78212",
       description: "Historic Japanese-style garden in Brackenridge Park with koi ponds and stone bridges",
       type: 'park',
+      coordinates: { latitude: 29.456000, longitude: -98.478600 },
     },
     {
       name: "Brackenridge Park",
       address: "3700 N St Mary's St, San Antonio, TX 78212",
       description: "343-acre park with trails, playgrounds, and scenic spots along the San Antonio River",
       type: 'park',
+      coordinates: { latitude: 29.453000, longitude: -98.476500 },
     },
     {
       name: "Hemisfair Park",
       address: "434 S Alamo St, San Antonio, TX 78205",
       description: "Urban park near downtown with Tower of the Americas and cultural attractions",
       type: 'park',
+      coordinates: { latitude: 29.418500, longitude: -98.484000 },
     },
   ],
   museum: [
@@ -136,24 +146,28 @@ const REAL_SAN_ANTONIO_VENUES: Record<StopType, VenueSearchResult[]> = {
       address: "200 W Jones Ave, San Antonio, TX 78215",
       description: "Comprehensive art museum with collections spanning 5,000 years in a historic building",
       type: 'museum',
+      coordinates: { latitude: 29.423300, longitude: -98.483000 },
     },
     {
       name: "The Witte Museum",
       address: "3801 Broadway, San Antonio, TX 78209",
       description: "Natural history and Texas heritage museum with rotating exhibits",
       type: 'museum',
+      coordinates: { latitude: 29.457800, longitude: -98.473000 },
     },
     {
       name: "McNay Art Museum",
       address: "6000 N New Braunfels Ave, San Antonio, TX 78209",
       description: "Modern art museum in a Spanish Colonial Revival mansion with beautiful grounds",
       type: 'museum',
+      coordinates: { latitude: 29.519900, longitude: -98.469200 },
     },
     {
       name: "DoSeum",
       address: "2800 Broadway, San Antonio, TX 78209",
       description: "Interactive children's museum (great for playful dates)",
       type: 'museum',
+      coordinates: { latitude: 29.456100, longitude: -98.472600 },
     },
   ],
   theater: [
@@ -179,15 +193,17 @@ const REAL_SAN_ANTONIO_VENUES: Record<StopType, VenueSearchResult[]> = {
   viewpoint: [
     {
       name: "Tower of the Americas",
-      address: "739 E César E. Chávez Blvd, San Antonio, TX 78205",
+      address: "739 E Cesar Chavez Blvd, San Antonio, TX 78205",
       description: "750-foot observation tower with 360-degree views of San Antonio and rotating restaurant",
       type: 'viewpoint',
+      coordinates: { latitude: 29.418983, longitude: -98.483513 },
     },
     {
-      name: "River Walk",
-      address: "San Antonio River Walk, San Antonio, TX",
+      name: "River Walk near Navarro Street",
+      address: "Navarro St at River Walk, San Antonio, TX 78205",
       description: "Scenic urban waterway with cypress-lined paths, riverside dining, and beautiful views",
       type: 'viewpoint',
+      coordinates: { latitude: 29.424800, longitude: -98.491400 },
     },
   ],
   activity: [
@@ -251,35 +267,35 @@ export async function selectRealVenue(
   // Select venue based on order (cycle through available venues)
   const venue = venues[order % venues.length];
 
-  // Geocode the real address
-  try {
-    const location = await geocodeAddress(venue.address);
+  // Use verified coordinates if available, otherwise geocode
+  let location: { latitude: number; longitude: number };
 
-    return {
-      name: venue.name,
-      type: stopType,
-      description: venue.description,
-      address: venue.address,
-      latitude: location.latitude,
-      longitude: location.longitude,
-      duration: getDefaultDuration(stopType),
-      order: order,
-    };
-  } catch (error) {
-    console.error(`Failed to geocode ${venue.name}:`, error);
-
-    // Fallback to approximate Pearl Brewery coordinates
-    return {
-      name: venue.name,
-      type: stopType,
-      description: venue.description,
-      address: venue.address,
-      latitude: 29.4509, // Pearl Brewery area
-      longitude: -98.4664,
-      duration: getDefaultDuration(stopType),
-      order: order,
-    };
+  if (venue.coordinates) {
+    // Use pre-verified coordinates
+    location = venue.coordinates;
+    console.log(`✓ Using verified coordinates for ${venue.name}`);
+  } else {
+    // Geocode the address
+    try {
+      location = await geocodeAddress(venue.address);
+      console.log(`✓ Geocoded ${venue.name}`);
+    } catch (error) {
+      console.error(`Failed to geocode ${venue.name}:`, error);
+      // Fallback to San Antonio downtown coordinates
+      location = { latitude: 29.4241, longitude: -98.4936 };
+    }
   }
+
+  return {
+    name: venue.name,
+    type: stopType,
+    description: venue.description,
+    address: venue.address,
+    latitude: location.latitude,
+    longitude: location.longitude,
+    duration: getDefaultDuration(stopType),
+    order: order,
+  };
 }
 
 /**
