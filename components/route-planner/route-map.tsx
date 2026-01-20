@@ -46,12 +46,9 @@ export function RouteMap({ route }: RouteMapProps) {
     return route.stops.map((stop) => [stop.longitude, stop.latitude]);
   }, [route.stops]);
 
-  // Use detailed CARTO Voyager basemap - proven to work with full street detail
-  // Voyager has comprehensive labels for streets, buildings, landmarks, and POIs
-  const mapStyle =
-    colorScheme === 'dark'
-      ? 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
-      : 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json';
+  // Use MapLibre demo tiles - most reliable for React Native with full OSM street data
+  // This is the proven basemap used in MapLibre examples and CI tests
+  const mapStyle = 'https://demotiles.maplibre.org/style.json';
 
   // Auto-fit map to route bounds when route changes
   useEffect(() => {
@@ -148,32 +145,33 @@ export function RouteMap({ route }: RouteMapProps) {
           <MapLibreGL.LineLayer
             id="routeLineOutline"
             style={{
-              lineColor: colorScheme === 'dark' ? '#000000' : '#FFFFFF',
-              lineWidth: 8,
+              lineColor: '#000000',
+              lineWidth: 10,
               lineOpacity: 0.3,
-              lineBlur: 2,
+              lineBlur: 3,
             }}
             belowLayerID="routeLine"
           />
-          {/* Main route line */}
+          {/* Main route line - yellow to match icon styling */}
           <MapLibreGL.LineLayer
             id="routeLine"
             style={{
-              lineColor: colorScheme === 'dark' ? '#FF6B6B' : '#0a7ea4',
-              lineWidth: 5,
-              lineOpacity: 0.9,
+              lineColor: '#FFD700',
+              lineWidth: 6,
+              lineOpacity: 1.0,
               lineCap: 'round',
               lineJoin: 'round',
             }}
           />
-          {/* Route line with dashes for visual interest */}
+          {/* Route line inner glow for visibility */}
           <MapLibreGL.LineLayer
-            id="routeLineDash"
+            id="routeLineGlow"
             style={{
-              lineColor: colorScheme === 'dark' ? '#FFFFFF' : '#FFFFFF',
-              lineWidth: 2,
-              lineOpacity: 0.4,
-              lineDasharray: [2, 4],
+              lineColor: '#FFF8DC',
+              lineWidth: 3,
+              lineOpacity: 0.8,
+              lineCap: 'round',
+              lineJoin: 'round',
             }}
           />
         </MapLibreGL.ShapeSource>
