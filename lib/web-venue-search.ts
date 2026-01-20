@@ -172,22 +172,39 @@ const REAL_SAN_ANTONIO_VENUES: Record<StopType, VenueSearchResult[]> = {
   ],
   theater: [
     {
-      name: "Majestic Theatre",
-      address: "224 E Houston St, San Antonio, TX 78205",
-      description: "Historic 1929 atmospheric theater hosting Broadway shows and performances",
+      name: "Jazz TX at The Landing",
+      address: "123 Losoya St, San Antonio, TX 78205",
+      description: "Premier jazz club on the River Walk featuring nightly live performances from local and national artists",
       type: 'theater',
+      coordinates: { latitude: 29.424500, longitude: -98.486800 },
     },
     {
       name: "Tobin Center for the Performing Arts",
       address: "100 Auditorium Cir, San Antonio, TX 78205",
       description: "Premier performing arts venue on the River Walk hosting concerts, ballet, and theater",
       type: 'theater',
+      coordinates: { latitude: 29.426100, longitude: -98.486200 },
     },
     {
       name: "Aztec Theatre",
       address: "104 N St Mary's St, San Antonio, TX 78205",
-      description: "Historic 1926 movie palace turned concert venue with Mesoamerican-inspired architecture",
+      description: "Historic 1926 movie palace turned concert venue with Mesoamerican-inspired architecture and live music",
       type: 'theater',
+      coordinates: { latitude: 29.427000, longitude: -98.490500 },
+    },
+    {
+      name: "Sam's Burger Joint",
+      address: "330 E Grayson St, San Antonio, TX 78215",
+      description: "Iconic live music venue near the Pearl featuring local bands, touring artists, and great burgers",
+      type: 'theater',
+      coordinates: { latitude: 29.443800, longitude: -98.479700 },
+    },
+    {
+      name: "The Espee",
+      address: "907 S Presa St, San Antonio, TX 78210",
+      description: "Intimate Southtown venue with live music, craft cocktails, and a laid-back atmosphere",
+      type: 'theater',
+      coordinates: { latitude: 29.416200, longitude: -98.487300 },
     },
   ],
   viewpoint: [

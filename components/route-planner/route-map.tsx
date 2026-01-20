@@ -15,8 +15,10 @@ interface RouteMapProps {
 
 export function RouteMap({ route }: RouteMapProps) {
   const [selectedStop, setSelectedStop] = useState<RouteStop | null>(null);
+  const [currentZoom, setCurrentZoom] = useState<number>(13);
   const colorScheme = useColorScheme();
   const cameraRef = useRef<any>(null);
+  const mapRef = useRef<any>(null);
 
   // Calculate map bounds from route stops
   const bounds = useMemo(() => {
@@ -44,12 +46,12 @@ export function RouteMap({ route }: RouteMapProps) {
     return route.stops.map((stop) => [stop.longitude, stop.latitude]);
   }, [route.stops]);
 
-  // Use detailed OSM basemap with real street names and landmarks
-  // OSM Liberty style has maximum detail for streets, buildings, and POIs
+  // Use detailed CARTO Voyager basemap - proven to work with full street detail
+  // Voyager has comprehensive labels for streets, buildings, landmarks, and POIs
   const mapStyle =
     colorScheme === 'dark'
       ? 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
-      : 'https://demotiles.maplibre.org/style.json'; // Demo tiles with excellent street detail
+      : 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json';
 
   // Auto-fit map to route bounds when route changes
   useEffect(() => {
@@ -73,19 +75,30 @@ export function RouteMap({ route }: RouteMapProps) {
     );
   };
 
-  // Zoom in
-  const zoomIn = () => {
-    cameraRef.current?.zoomTo(15, 500);
+  // Zoom in - increase by 1 level
+  const zoomIn = async () => {
+    const newZoom = Math.min(currentZoom + 1, 20);
+    setCurrentZoom(newZoom);
+    cameraRef.current?.setCamera({
+      zoomLevel: newZoom,
+      animationDuration: 300,
+    });
   };
 
-  // Zoom out
-  const zoomOut = () => {
-    cameraRef.current?.zoomTo(11, 500);
+  // Zoom out - decrease by 1 level
+  const zoomOut = async () => {
+    const newZoom = Math.max(currentZoom - 1, 1);
+    setCurrentZoom(newZoom);
+    cameraRef.current?.setCamera({
+      zoomLevel: newZoom,
+      animationDuration: 300,
+    });
   };
 
   return (
     <View style={styles.container}>
       <MapLibreGL.MapView
+        ref={mapRef}
         style={styles.map}
         styleURL={mapStyle}
         logoEnabled={false}
@@ -100,6 +113,12 @@ export function RouteMap({ route }: RouteMapProps) {
         scrollEnabled={true}
         pitchEnabled={true}
         zoomEnabled={true}
+        onRegionDidChange={async () => {
+          if (cameraRef.current) {
+            const zoom = await cameraRef.current.getZoom();
+            if (zoom) setCurrentZoom(zoom);
+          }
+        }}
       >
         <MapLibreGL.Camera
           ref={cameraRef}
