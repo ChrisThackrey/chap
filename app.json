@@ -60,7 +60,8 @@
       [
         "react-native-maps",
         {
-          "playServicesLocationVersion": "21.0.1"
+          "playServicesLocationVersion": "21.0.1",
+          "iosGoogleMapsApiKey": "REDACTED_GOOGLE_MAPS_API_KEY"
         }
       ]
     ],
