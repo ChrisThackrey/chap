@@ -44,13 +44,13 @@ export async function validateAndEnrichStops(
 ): Promise<RouteValidationResult<RouteStop[]>> {
   const warnings: ValidationWarning[] = [];
 
-  // If Foursquare is not configured, fall back to geocoding only
+  // If Foursquare is not configured or unavailable (410), fall back to geocoding only
   if (!isFoursquareConfigured()) {
-    console.warn('Foursquare API not configured, falling back to basic geocoding');
+    console.warn('Foursquare API not available, using geocoding only');
     warnings.push({
       severity: 'info',
-      message: 'Foursquare API not configured. Using geocoding only.',
-      suggestedAction: 'Configure EXPO_PUBLIC_FOURSQUARE_API_KEY for verified venue data',
+      message: 'Using geocoding for venue locations.',
+      suggestedAction: 'Configure a valid Foursquare API key for verified venue data',
     });
     const geocodedStops = await fallbackToGeocoding(stops, userLocation);
     warnings.push(...geocodedStops.warnings);
@@ -78,7 +78,7 @@ export async function validateAndEnrichStops(
         throw error;
       }
 
-      console.error(`Error validating stop ${stop.name}:`, error);
+      console.warn(`Error validating stop ${stop.name}:`, classifiedError.userMessage);
       warnings.push({
         severity: 'warning',
         stopIndex: i,

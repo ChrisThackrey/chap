@@ -109,6 +109,17 @@ function classifyAPIError(error: any): ClassifiedError {
         statusCode,
       };
 
+    case 410:
+      return {
+        type: 'NOT_FOUND',
+        originalError: error,
+        isRecoverable: true,
+        shouldRetry: false,
+        userMessage: 'Foursquare API access unavailable. Using geocoding fallback.',
+        suggestedAction: 'Foursquare V3 API requires a legacy account or paid plan',
+        statusCode,
+      };
+
     case 500:
     case 502:
     case 503:

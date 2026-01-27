@@ -5,6 +5,9 @@ import { extractParkingInfo } from './parking-detection';
 const FOURSQUARE_API_KEY = process.env.EXPO_PUBLIC_FOURSQUARE_API_KEY;
 const FOURSQUARE_API_BASE = 'https://api.foursquare.com/v3';
 
+// Track if Foursquare API has returned 410 (V3 deprecated for this account)
+let foursquareApiDeprecated = false;
+
 /**
  * Custom error class for Foursquare API errors
  * Includes status code and response body for better error classification
@@ -95,6 +98,11 @@ export async function searchNearbyVenues(
     throw new Error('Foursquare API key not configured');
   }
 
+  // Skip API call if we know it's deprecated
+  if (foursquareApiDeprecated) {
+    return [];
+  }
+
   const params = new URLSearchParams({
     query,
     ll: `${latitude},${longitude}`,
@@ -113,6 +121,12 @@ export async function searchNearbyVenues(
   });
 
   if (!response.ok) {
+    // Handle 410 Gone silently - API deprecated for this account
+    if (response.status === 410) {
+      foursquareApiDeprecated = true;
+      console.warn('Foursquare V3 API unavailable (410 Gone). Falling back to geocoding.');
+      return [];
+    }
     const errorText = await response.text();
     throw new FoursquareAPIError(response.status, response.statusText, errorText);
   }
@@ -128,8 +142,8 @@ export async function searchNearbyVenues(
  * @returns Detailed venue information
  */
 export async function getPlaceDetails(placeId: string): Promise<FoursquareVenue | null> {
-  if (!FOURSQUARE_API_KEY) {
-    throw new Error('Foursquare API key not configured');
+  if (!FOURSQUARE_API_KEY || foursquareApiDeprecated) {
+    return null;
   }
 
   const fields = [
@@ -160,7 +174,10 @@ export async function getPlaceDetails(placeId: string): Promise<FoursquareVenue 
   );
 
   if (!response.ok) {
-    if (response.status === 404) {
+    if (response.status === 404 || response.status === 410) {
+      if (response.status === 410) {
+        foursquareApiDeprecated = true;
+      }
       return null;
     }
     const errorText = await response.text();
@@ -271,10 +288,10 @@ function toRadians(degrees: number): number {
 }
 
 /**
- * Check if Foursquare API is configured
+ * Check if Foursquare API is configured and available
  */
 export function isFoursquareConfigured(): boolean {
-  return !!FOURSQUARE_API_KEY && FOURSQUARE_API_KEY.length > 0;
+  return !!FOURSQUARE_API_KEY && FOURSQUARE_API_KEY.length > 0 && !foursquareApiDeprecated;
 }
 
 /**
@@ -314,8 +331,7 @@ export async function searchParkingNearVenue(
   longitude: number,
   radius: number = 500
 ): Promise<ParkingLocation | null> {
-  if (!FOURSQUARE_API_KEY) {
-    console.warn('Foursquare API key not configured, cannot search for parking');
+  if (!FOURSQUARE_API_KEY || foursquareApiDeprecated) {
     return null;
   }
 
@@ -351,7 +367,7 @@ export async function searchParkingNearVenue(
       distanceToVenue: distance * 1000, // Convert km to meters
     };
   } catch (error) {
-    console.error('Error searching for parking:', error);
+    console.warn('Error searching for parking:', error instanceof Error ? error.message : error);
     return null;
   }
 }
