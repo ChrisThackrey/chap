@@ -19,6 +19,7 @@ export function RouteMap({ route }: RouteMapProps) {
   const [useAppleMaps, setUseAppleMaps] = useState(true); // Default to Apple Maps until Google is fixed
   const [mapStatus, setMapStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const mapRef = useRef<MapView>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Debug: Log component mount and initial state
   useEffect(() => {
@@ -40,7 +41,7 @@ export function RouteMap({ route }: RouteMapProps) {
       console.log('   Waiting for native map initialization...');
 
       // Set a timeout to check if map loaded
-      const timeoutId = setTimeout(() => {
+      timeoutRef.current = setTimeout(() => {
         const elapsed = ((Date.now() - switchTime) / 1000).toFixed(1);
         console.error(`❌ Google Maps TIMEOUT after ${elapsed} seconds`);
         console.error('   Native map initialization FAILED');
@@ -54,7 +55,12 @@ export function RouteMap({ route }: RouteMapProps) {
         setMapStatus('error');
       }, 10000);
 
-      return () => clearTimeout(timeoutId);
+      return () => {
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+          timeoutRef.current = null;
+        }
+      };
     }
   }, [useAppleMaps]);
 
@@ -274,6 +280,14 @@ export function RouteMap({ route }: RouteMapProps) {
           console.log('✅ MapView onMapReady called - native map initialized');
           console.log(`   Provider: ${useAppleMaps ? 'Apple Maps' : 'Google Maps'}`);
           console.log(`   Timestamp: ${new Date().toISOString()}`);
+
+          // Clear the timeout since map loaded successfully
+          if (timeoutRef.current) {
+            clearTimeout(timeoutRef.current);
+            timeoutRef.current = null;
+            console.log('✅ Timeout cleared - map initialized successfully');
+          }
+
           setMapStatus('ready');
         }}
         onMapLoaded={() => {
