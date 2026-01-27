@@ -58,6 +58,9 @@ export interface RouteStop {
   parkingStrategy?: 'drive-to-venue' | 'park-and-walk';
   parkingLocation?: ParkingLocation;
   walkingDistance?: number; // meters
+  // Validation information
+  validationStatus?: 'verified' | 'geocoded' | 'approximated' | 'fallback';
+  validationWarnings?: string[];
 }
 
 // Travel mode for route segments

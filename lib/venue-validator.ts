@@ -1,13 +1,21 @@
 import { RouteStop, UserLocation } from '@/types/route';
+import { ValidationWarning, RouteValidationResult } from '@/types/validation';
 import {
   searchNearbyVenues,
   searchVenuesByType,
   getPlaceDetails,
   mapVenueToDetails,
-  calculateDistance,
   isFoursquareConfigured,
 } from './foursquare';
-import { geocodeAddress } from './geocoding';
+import { geocodeAddressWithScore } from './geocoding';
+import { validateAddressQuality } from './address-validator';
+import {
+  classifyError,
+  shouldFailFast,
+  createLowConfidenceError,
+  createRegionMismatchError,
+} from './error-classifier';
+import { validateCoordinatesInRegion } from './geocoding-scorer';
 
 /**
  * Validation configuration
@@ -18,40 +26,75 @@ const VALIDATION_CONFIG = {
   MIN_RATING: 7.0, // Prefer venues with rating >= 7.0
   MAX_DISTANCE_KM: 96.5, // Maximum acceptable distance from location (60 miles)
   SEARCH_LIMIT: 20, // Number of results to fetch per search (increased for wider area)
+  MIN_CONFIDENCE: 0.5, // Minimum geocoding confidence to accept without warning
+  MAX_REGION_DISTANCE_KM: 100, // Maximum distance from user location for region validation
 };
 
 /**
  * Validate and enrich route stops with real venue data from Foursquare
+ * Now returns validation warnings along with stops
  *
  * @param stops - Array of AI-generated stops
  * @param userLocation - Optional user location for context
- * @returns Array of validated and enriched stops
+ * @returns Object containing validated stops and validation warnings
  */
 export async function validateAndEnrichStops(
   stops: Partial<RouteStop>[],
   userLocation?: UserLocation
-): Promise<RouteStop[]> {
+): Promise<RouteValidationResult<RouteStop[]>> {
+  const warnings: ValidationWarning[] = [];
+
   // If Foursquare is not configured, fall back to geocoding only
   if (!isFoursquareConfigured()) {
     console.warn('Foursquare API not configured, falling back to basic geocoding');
-    return await fallbackToGeocoding(stops, userLocation);
+    warnings.push({
+      severity: 'info',
+      message: 'Foursquare API not configured. Using geocoding only.',
+      suggestedAction: 'Configure EXPO_PUBLIC_FOURSQUARE_API_KEY for verified venue data',
+    });
+    const geocodedStops = await fallbackToGeocoding(stops, userLocation);
+    warnings.push(...geocodedStops.warnings);
+    return { data: geocodedStops.data, warnings };
   }
 
   const validatedStops: RouteStop[] = [];
 
-  for (const stop of stops) {
+  for (let i = 0; i < stops.length; i++) {
+    const stop = stops[i];
     try {
-      const validatedStop = await validateStop(stop, userLocation);
-      validatedStops.push(validatedStop);
+      const result = await validateStop(stop, userLocation, i);
+      validatedStops.push(result.data);
+      warnings.push(...result.warnings);
     } catch (error) {
+      const classifiedError = classifyError(error);
+
+      // Fail fast for auth errors
+      if (shouldFailFast(classifiedError)) {
+        warnings.push({
+          severity: 'error',
+          message: classifiedError.userMessage,
+          suggestedAction: classifiedError.suggestedAction,
+        });
+        throw error;
+      }
+
       console.error(`Error validating stop ${stop.name}:`, error);
+      warnings.push({
+        severity: 'warning',
+        stopIndex: i,
+        stopName: stop.name,
+        message: `Failed to validate "${stop.name}": ${classifiedError.userMessage}`,
+        suggestedAction: classifiedError.suggestedAction,
+      });
+
       // Fall back to geocoding for this stop
-      const fallbackStop = await validateStopWithGeocoding(stop, userLocation);
-      validatedStops.push(fallbackStop);
+      const fallbackResult = await validateStopWithGeocoding(stop, userLocation, i);
+      validatedStops.push(fallbackResult.data);
+      warnings.push(...fallbackResult.warnings);
     }
   }
 
-  return validatedStops;
+  return { data: validatedStops, warnings };
 }
 
 /**
@@ -59,10 +102,25 @@ export async function validateAndEnrichStops(
  */
 async function validateStop(
   stop: Partial<RouteStop>,
-  userLocation?: UserLocation
-): Promise<RouteStop> {
+  userLocation?: UserLocation,
+  stopIndex?: number
+): Promise<RouteValidationResult<RouteStop>> {
   if (!stop.name || !stop.type || !stop.address) {
     throw new Error('Invalid stop: missing required fields');
+  }
+
+  const warnings: ValidationWarning[] = [];
+
+  // LAYER 1: Pre-validate address quality
+  const addressQuality = validateAddressQuality(stop.address);
+  if (!addressQuality.isValid || addressQuality.confidence < 0.6) {
+    warnings.push({
+      severity: 'warning',
+      stopIndex,
+      stopName: stop.name,
+      message: `Address for "${stop.name}" may be too generic: ${addressQuality.issues.join(', ')}`,
+      suggestedAction: addressQuality.suggestions?.[0],
+    });
   }
 
   // Strategy 1: Search by name and description near the user location
@@ -84,6 +142,27 @@ async function validateStop(
   if (venues.length > 0) {
     const bestVenue = selectBestVenue(venues, stop);
 
+    // LAYER 3: Validate coordinates in expected region
+    if (userLocation) {
+      const isInRegion = validateCoordinatesInRegion(
+        bestVenue.geocodes.main.latitude,
+        bestVenue.geocodes.main.longitude,
+        { lat: userLocation.latitude, lon: userLocation.longitude },
+        VALIDATION_CONFIG.MAX_REGION_DISTANCE_KM
+      );
+
+      if (!isInRegion) {
+        const regionError = createRegionMismatchError(stop.name!, 'user location');
+        warnings.push({
+          severity: 'warning',
+          stopIndex,
+          stopName: stop.name,
+          message: regionError.userMessage,
+          suggestedAction: regionError.suggestedAction,
+        });
+      }
+    }
+
     // Fetch detailed information
     const venueDetails = await getPlaceDetails(bestVenue.fsq_id);
 
@@ -98,16 +177,17 @@ async function validateStop(
         duration: stop.duration || 60,
         order: stop.order || 1,
         venueDetails: mapVenueToDetails(venueDetails),
+        validationStatus: 'verified',
       };
 
       console.log(`✓ Validated venue: ${enrichedStop.name} (rating: ${enrichedStop.venueDetails?.rating})`);
-      return enrichedStop;
+      return { data: enrichedStop, warnings };
     }
   }
 
   // Fallback: Use AI suggestion with geocoding
   console.log(`No suitable venue found for ${stop.name}, using AI suggestion`);
-  return await validateStopWithGeocoding(stop, userLocation);
+  return await validateStopWithGeocoding(stop, userLocation, stopIndex);
 }
 
 /**
@@ -124,11 +204,12 @@ async function getSearchCenter(
 
   // Fall back to geocoding the address
   try {
-    return await geocodeAddress(stop.address!);
+    const result = await geocodeAddressWithScore(stop.address!);
+    return { latitude: result.lat, longitude: result.lon };
   } catch (error) {
-    console.warn(`Could not geocode ${stop.address}, using San Francisco as default`);
-    // Default to San Francisco
-    return { latitude: 37.7749, longitude: -122.4194 };
+    console.warn(`Could not geocode ${stop.address}, using fallback location`);
+    // Default to center of US if no user location
+    return { latitude: 39.8283, longitude: -98.5795 };
   }
 }
 
@@ -342,33 +423,88 @@ function calculateNameSimilarity(name1: string, name2: string): number {
  */
 async function validateStopWithGeocoding(
   stop: Partial<RouteStop>,
-  userLocation?: UserLocation
-): Promise<RouteStop> {
+  userLocation?: UserLocation,
+  stopIndex?: number
+): Promise<RouteValidationResult<RouteStop>> {
   if (!stop.name || !stop.type || !stop.address) {
     throw new Error('Invalid stop: missing required fields');
   }
 
+  const warnings: ValidationWarning[] = [];
   let location: { latitude: number; longitude: number };
+  let validationStatus: 'geocoded' | 'approximated' | 'fallback' = 'fallback';
 
   try {
-    // Try to geocode the address
-    location = await geocodeAddress(stop.address);
+    // LAYER 2: Try to geocode with scoring
+    const geocodingResult = await geocodeAddressWithScore(stop.address);
+    location = { latitude: geocodingResult.lat, longitude: geocodingResult.lon };
+
+    // LAYER 3: Check confidence and region
+    if (geocodingResult.confidence < VALIDATION_CONFIG.MIN_CONFIDENCE) {
+      const confidenceError = createLowConfidenceError(geocodingResult.confidence, stop.name);
+      warnings.push({
+        severity: 'warning',
+        stopIndex,
+        stopName: stop.name,
+        message: confidenceError.userMessage,
+        suggestedAction: confidenceError.suggestedAction,
+      });
+      validationStatus = 'approximated';
+    } else {
+      validationStatus = 'geocoded';
+    }
+
+    // Validate region
+    if (userLocation) {
+      const isInRegion = validateCoordinatesInRegion(
+        geocodingResult.lat,
+        geocodingResult.lon,
+        { lat: userLocation.latitude, lon: userLocation.longitude },
+        VALIDATION_CONFIG.MAX_REGION_DISTANCE_KM
+      );
+
+      if (!isInRegion) {
+        const regionError = createRegionMismatchError(stop.name!, 'user location');
+        warnings.push({
+          severity: 'warning',
+          stopIndex,
+          stopName: stop.name,
+          message: regionError.userMessage,
+          suggestedAction: regionError.suggestedAction,
+        });
+      }
+    }
   } catch (error) {
     console.warn(`Geocoding failed for ${stop.address}, using fallback location`);
-    // Use user location or default to San Francisco
-    location = userLocation || { latitude: 37.7749, longitude: -122.4194 };
+    const classifiedError = classifyError(error);
+
+    warnings.push({
+      severity: 'error',
+      stopIndex,
+      stopName: stop.name,
+      message: `Could not locate "${stop.name}". Using fallback location.`,
+      suggestedAction: classifiedError.suggestedAction || 'Try a more specific address',
+    });
+
+    // Use user location or center of US as fallback
+    location = userLocation || { latitude: 39.8283, longitude: -98.5795 };
+    validationStatus = 'fallback';
   }
 
   return {
-    name: stop.name,
-    type: stop.type,
-    description: stop.description || '',
-    address: stop.address,
-    latitude: location.latitude,
-    longitude: location.longitude,
-    duration: stop.duration || 60,
-    order: stop.order || 1,
-    // No venueDetails - indicates unverified venue
+    data: {
+      name: stop.name,
+      type: stop.type,
+      description: stop.description || '',
+      address: stop.address,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      duration: stop.duration || 60,
+      order: stop.order || 1,
+      validationStatus,
+      validationWarnings: warnings.length > 0 ? warnings.map(w => w.message) : undefined,
+    },
+    warnings,
   };
 }
 
@@ -378,19 +514,28 @@ async function validateStopWithGeocoding(
 async function fallbackToGeocoding(
   stops: Partial<RouteStop>[],
   userLocation?: UserLocation
-): Promise<RouteStop[]> {
+): Promise<RouteValidationResult<RouteStop[]>> {
   const validatedStops: RouteStop[] = [];
+  const warnings: ValidationWarning[] = [];
 
-  for (const stop of stops) {
+  for (let i = 0; i < stops.length; i++) {
+    const stop = stops[i];
     try {
-      const validatedStop = await validateStopWithGeocoding(stop, userLocation);
-      validatedStops.push(validatedStop);
+      const result = await validateStopWithGeocoding(stop, userLocation, i);
+      validatedStops.push(result.data);
+      warnings.push(...result.warnings);
     } catch (error) {
       console.error(`Error geocoding stop ${stop.name}:`, error);
+      warnings.push({
+        severity: 'error',
+        stopIndex: i,
+        stopName: stop.name,
+        message: `Failed to process "${stop.name}". Skipping this stop.`,
+      });
       // Skip this stop if even geocoding fails
       continue;
     }
   }
 
-  return validatedStops;
+  return { data: validatedStops, warnings };
 }

@@ -1,4 +1,17 @@
 import { RouteStop } from '@/types/route';
+import { GeocodingResult } from '@/types/validation';
+import { scoreGeocodingResult, validateCoordinatesInRegion } from './geocoding-scorer';
+
+interface NominatimResponse {
+  lat: string;
+  lon: string;
+  display_name: string;
+  type?: string;
+  importance?: number;
+  boundingbox?: string[];
+  osm_type?: string;
+  class?: string;
+}
 
 /**
  * Geocode an address to coordinates using Nominatim (OpenStreetMap)
@@ -8,6 +21,20 @@ import { RouteStop } from '@/types/route';
 export async function geocodeAddress(
   address: string
 ): Promise<{ latitude: number; longitude: number }> {
+  const result = await geocodeAddressWithScore(address);
+  return {
+    latitude: result.lat,
+    longitude: result.lon,
+  };
+}
+
+/**
+ * Geocode an address with confidence scoring
+ * Returns full GeocodingResult with quality assessment
+ */
+export async function geocodeAddressWithScore(
+  address: string
+): Promise<GeocodingResult> {
   const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
     address
   )}`;
@@ -18,16 +45,18 @@ export async function geocodeAddress(
     },
   });
 
-  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(`Nominatim API error: ${response.statusText}`);
+  }
+
+  const data: NominatimResponse[] = await response.json();
 
   if (!data || data.length === 0) {
     throw new Error(`Could not geocode address: ${address}`);
   }
 
-  return {
-    latitude: parseFloat(data[0].lat),
-    longitude: parseFloat(data[0].lon),
-  };
+  // Score the best result
+  return scoreGeocodingResult(data[0], address);
 }
 
 /**

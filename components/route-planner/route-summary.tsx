@@ -20,6 +20,13 @@ export function RouteSummary({ route, onSave, onRegenerate }: RouteSummaryProps)
   const minutes = totalDuration % 60;
   const durationText = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
 
+  // Calculate validation statistics
+  const verifiedCount = route.stops.filter((s) => s.validationStatus === 'verified').length;
+  const geocodedCount = route.stops.filter((s) => s.validationStatus === 'geocoded').length;
+  const approximateCount = route.stops.filter(
+    (s) => s.validationStatus === 'approximated' || s.validationStatus === 'fallback'
+  ).length;
+
   const handleShare = async () => {
     try {
       const message = `${route.title}\n\n${route.stops
@@ -55,6 +62,27 @@ export function RouteSummary({ route, onSave, onRegenerate }: RouteSummaryProps)
             ⭐ {route.stops.length} stops • {durationText}
           </ThemedText>
         </View>
+
+        {/* Validation badges */}
+        {(verifiedCount > 0 || approximateCount > 0) && (
+          <View style={styles.validationBadges}>
+            {verifiedCount > 0 && (
+              <View style={[styles.badge, styles.verifiedBadge]}>
+                <ThemedText style={styles.badgeText}>✓ {verifiedCount} verified</ThemedText>
+              </View>
+            )}
+            {geocodedCount > 0 && (
+              <View style={[styles.badge, styles.geocodedBadge]}>
+                <ThemedText style={styles.badgeText}>◉ {geocodedCount} geocoded</ThemedText>
+              </View>
+            )}
+            {approximateCount > 0 && (
+              <View style={[styles.badge, styles.approximateBadge]}>
+                <ThemedText style={styles.badgeText}>~ {approximateCount} approximate</ThemedText>
+              </View>
+            )}
+          </View>
+        )}
       </View>
 
       <View style={styles.actions}>
@@ -122,6 +150,34 @@ const styles = StyleSheet.create({
   },
   actionButtonTextSecondary: {
     fontSize: 14,
+    fontWeight: '600',
+  },
+  validationBadges: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+  },
+  badge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  verifiedBadge: {
+    backgroundColor: '#d1fae5',
+    borderColor: '#10b981',
+  },
+  geocodedBadge: {
+    backgroundColor: '#dbeafe',
+    borderColor: '#3b82f6',
+  },
+  approximateBadge: {
+    backgroundColor: '#fef3c7',
+    borderColor: '#f59e0b',
+  },
+  badgeText: {
+    fontSize: 12,
     fontWeight: '600',
   },
 });

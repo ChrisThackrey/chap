@@ -8,6 +8,7 @@ import { LoadingState } from '@/components/route-planner/loading-state';
 import { RouteSummary } from '@/components/route-planner/route-summary';
 import { RouteMap } from '@/components/route-planner/route-map';
 import { LocationSelector } from '@/components/route-planner/location-selector';
+import { ValidationAlert } from '@/components/route-planner/validation-alert';
 import { useRouteGeneration } from '@/hooks/use-route-generation';
 import { useUserLocation } from '@/hooks/use-user-location';
 import { useRouteStorage } from '@/hooks/use-route-storage';
@@ -16,7 +17,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors } from '@/constants/theme';
 
 export default function RoutePlannerScreen() {
-  const { state, route, error, generate, reset } = useRouteGeneration();
+  const { state, route, warnings, error, generate, reset } = useRouteGeneration();
   const { location: deviceLocation, requestLocation } = useUserLocation();
   const { saveRoute } = useRouteStorage();
   const { location: preferredLocation, saveLocation, getLocationContext } = useLocationPreference();
@@ -120,7 +121,10 @@ export default function RoutePlannerScreen() {
 
       {state === 'success' && route && (
         <View style={{ flex: 1 }}>
-          <RouteSummary route={route} onSave={handleSave} onRegenerate={reset} />
+          <ScrollView style={{ maxHeight: warnings.length > 0 ? '35%' : '20%' }}>
+            <RouteSummary route={route} onSave={handleSave} onRegenerate={reset} />
+            {warnings.length > 0 && <ValidationAlert warnings={warnings} />}
+          </ScrollView>
           <View style={{ flex: 1 }}>
             <RouteMap route={route} />
           </View>

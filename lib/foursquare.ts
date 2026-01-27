@@ -6,6 +6,24 @@ const FOURSQUARE_API_KEY = process.env.EXPO_PUBLIC_FOURSQUARE_API_KEY;
 const FOURSQUARE_API_BASE = 'https://api.foursquare.com/v3';
 
 /**
+ * Custom error class for Foursquare API errors
+ * Includes status code and response body for better error classification
+ */
+export class FoursquareAPIError extends Error {
+  statusCode: number;
+  statusText: string;
+  responseBody: string;
+
+  constructor(statusCode: number, statusText: string, responseBody: string) {
+    super(`Foursquare API error (${statusCode}): ${statusText}`);
+    this.name = 'FoursquareAPIError';
+    this.statusCode = statusCode;
+    this.statusText = statusText;
+    this.responseBody = responseBody;
+  }
+}
+
+/**
  * Foursquare API response interfaces
  */
 interface FoursquareVenue {
@@ -89,14 +107,14 @@ export async function searchNearbyVenues(
   const response = await fetch(`${FOURSQUARE_API_BASE}/places/search?${params}`, {
     method: 'GET',
     headers: {
-      'Authorization': FOURSQUARE_API_KEY,
+      'Authorization': `Bearer ${FOURSQUARE_API_KEY}`,
       'Accept': 'application/json',
     },
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Foursquare API error (${response.status}): ${errorText}`);
+    throw new FoursquareAPIError(response.status, response.statusText, errorText);
   }
 
   const data: FoursquareSearchResponse = await response.json();
@@ -135,7 +153,7 @@ export async function getPlaceDetails(placeId: string): Promise<FoursquareVenue 
     {
       method: 'GET',
       headers: {
-        'Authorization': FOURSQUARE_API_KEY,
+        'Authorization': `Bearer ${FOURSQUARE_API_KEY}`,
         'Accept': 'application/json',
       },
     }
@@ -146,7 +164,7 @@ export async function getPlaceDetails(placeId: string): Promise<FoursquareVenue 
       return null;
     }
     const errorText = await response.text();
-    throw new Error(`Foursquare API error (${response.status}): ${errorText}`);
+    throw new FoursquareAPIError(response.status, response.statusText, errorText);
   }
 
   const venue: FoursquareVenue = await response.json();

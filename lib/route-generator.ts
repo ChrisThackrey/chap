@@ -1,11 +1,17 @@
 import { openai, MODEL } from './openai';
 import { validateAndEnrichStops } from './venue-validator';
 import { Route, RouteStop, UserLocation } from '@/types/route';
+import { ValidationWarning } from '@/types/validation';
 import uuid from 'react-native-uuid';
 
 export interface RouteGenerationOptions {
   userLocation?: UserLocation;
   locationContext?: string; // City, state, zip code context
+}
+
+export interface RouteGenerationResult {
+  route: Route;
+  warnings: ValidationWarning[];
 }
 
 /**
@@ -70,7 +76,7 @@ function parsePromptForVenueTypes(prompt: string): Record<string, string[]> {
 export async function generateRoute(
   prompt: string,
   options?: RouteGenerationOptions
-): Promise<Route> {
+): Promise<RouteGenerationResult> {
   const userLocation = options?.userLocation;
   const locationContext = options?.locationContext;
 
@@ -190,12 +196,17 @@ Consider flow, timing, variety, and geographic proximity. Ensure realistic timin
   const routeData = JSON.parse(response.choices[0].message.content || '{}');
 
   // Enrich stops with real venue data using dynamic Foursquare API search
-  const realVenues = await validateAndEnrichStops(routeData.stops, userLocation);
+  const validationResult = await validateAndEnrichStops(routeData.stops, userLocation);
 
-  return {
+  const route: Route = {
     id: String(uuid.v4()),
     title: routeData.title,
-    stops: realVenues,
+    stops: validationResult.data,
     createdAt: new Date().toISOString(),
+  };
+
+  return {
+    route,
+    warnings: validationResult.warnings,
   };
 }
