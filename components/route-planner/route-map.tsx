@@ -1,11 +1,13 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { View, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE, PROVIDER_DEFAULT } from 'react-native-maps';
 import { ThemedText } from '@/components/themed-text';
 import { StopMarker } from './stop-marker';
 import { StopDetailModal } from './stop-detail-modal';
-import { Route, RouteStop } from '@/types/route';
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { Route, RouteStop, RouteSegment } from '@/types/route';
 import { fetchCompleteRoute, RouteCoordinate } from '@/lib/google-directions';
+import { optimizeRouteForParking } from '@/lib/route-optimizer';
 
 interface RouteMapProps {
   route: Route;
@@ -14,6 +16,7 @@ interface RouteMapProps {
 export function RouteMap({ route }: RouteMapProps) {
   const [selectedStop, setSelectedStop] = useState<RouteStop | null>(null);
   const [routeCoordinates, setRouteCoordinates] = useState<RouteCoordinate[]>([]);
+  const [routeSegments, setRouteSegments] = useState<RouteSegment[]>([]);
   const [isLoadingRoute, setIsLoadingRoute] = useState(false);
   const [currentRegion, setCurrentRegion] = useState<any>(null);
   const [useAppleMaps, setUseAppleMaps] = useState(true); // Default to Apple Maps until Google is fixed
@@ -109,10 +112,11 @@ export function RouteMap({ route }: RouteMapProps) {
     }));
   }, [route.stops]);
 
-  // Fetch road-following route from Google Directions API
+  // Fetch road-following route with parking optimization
   useEffect(() => {
     if (route.stops.length < 2) {
       // Single stop, no route needed
+      setRouteSegments([]);
       setRouteCoordinates([]);
       return;
     }
@@ -120,21 +124,56 @@ export function RouteMap({ route }: RouteMapProps) {
     let isMounted = true;
     setIsLoadingRoute(true);
 
-    fetchCompleteRoute(stopCoordinates)
-      .then((coordinates) => {
+    console.log('🗺️ Starting route optimization for', route.stops.length, 'stops');
+
+    // Try optimized route with parking detection first
+    optimizeRouteForParking(route.stops)
+      .then(({ optimizedStops, segments }) => {
         if (isMounted) {
-          console.log('🗺️ Route coordinates loaded:', coordinates.length, 'points');
-          setRouteCoordinates(coordinates);
+          console.log('✅ Route segments loaded:', segments.length, 'segments');
+          console.log('   Walking segments:', segments.filter(s => s.mode === 'walking').length);
+          console.log('   Driving segments:', segments.filter(s => s.mode === 'driving').length);
+
+          if (segments.length > 0) {
+            setRouteSegments(segments);
+            setRouteCoordinates([]); // Clear old coordinates
+          } else {
+            console.warn('⚠️ No segments returned, falling back to simple route');
+            // Fallback if no segments
+            return fetchCompleteRoute(stopCoordinates).then(coords => {
+              if (isMounted) {
+                setRouteCoordinates(coords);
+                setRouteSegments([]);
+              }
+            });
+          }
           setIsLoadingRoute(false);
         }
       })
       .catch((error) => {
-        console.error('❌ Error fetching route:', error);
+        console.error('❌ Error optimizing route:', error);
         if (isMounted) {
-          // Fallback to straight lines between stops
-          console.log('🗺️ Using fallback direct lines between', stopCoordinates.length, 'stops');
-          setRouteCoordinates(stopCoordinates);
-          setIsLoadingRoute(false);
+          console.log('🔄 Falling back to simple driving route');
+          // Fallback to simple driving route
+          fetchCompleteRoute(stopCoordinates)
+            .then(coords => {
+              if (isMounted) {
+                console.log('✅ Fallback route loaded:', coords.length, 'points');
+                setRouteCoordinates(coords);
+                setRouteSegments([]); // Clear segments to use fallback rendering
+                setIsLoadingRoute(false);
+              }
+            })
+            .catch((fallbackError) => {
+              console.error('❌ Fallback route also failed:', fallbackError);
+              if (isMounted) {
+                // Final fallback: straight lines
+                console.log('🔄 Using straight lines between stops');
+                setRouteCoordinates(stopCoordinates);
+                setRouteSegments([]);
+                setIsLoadingRoute(false);
+              }
+            });
         }
       });
 
@@ -296,8 +335,46 @@ export function RouteMap({ route }: RouteMapProps) {
           setMapStatus('ready');
         }}
       >
-        {/* Route lines - only render if we have coordinates and not loading */}
-        {!isLoadingRoute && routeCoordinates.length > 0 && (
+        {/* Multi-mode route segments with different styles */}
+        {!isLoadingRoute && routeSegments.length > 0 && (
+          <>
+            {routeSegments.map((segment) => (
+              <React.Fragment key={`segment-${segment.id}`}>
+                {/* Shadow layer */}
+                <Polyline
+                  coordinates={segment.coordinates}
+                  strokeColor="rgba(0, 0, 0, 0.3)"
+                  strokeWidth={10}
+                  lineCap="round"
+                  lineJoin="round"
+                />
+
+                {/* Main line - color based on mode */}
+                <Polyline
+                  coordinates={segment.coordinates}
+                  strokeColor={segment.mode === 'walking' ? '#4CAF50' : '#FFD700'}
+                  strokeWidth={6}
+                  lineCap="round"
+                  lineJoin="round"
+                  lineDashPattern={segment.mode === 'walking' ? [2, 8] : undefined}
+                />
+
+                {/* Inner glow */}
+                <Polyline
+                  coordinates={segment.coordinates}
+                  strokeColor={segment.mode === 'walking' ? '#81C784' : '#FFF8DC'}
+                  strokeWidth={3}
+                  lineCap="round"
+                  lineJoin="round"
+                  lineDashPattern={segment.mode === 'walking' ? [2, 8] : undefined}
+                />
+              </React.Fragment>
+            ))}
+          </>
+        )}
+
+        {/* Fallback: old route coordinates if segments not available */}
+        {!isLoadingRoute && routeCoordinates.length > 0 && routeSegments.length === 0 && (
           <>
             {/* Shadow layer for depth effect */}
             <Polyline
@@ -326,7 +403,26 @@ export function RouteMap({ route }: RouteMapProps) {
           </>
         )}
 
-        {/* Stop markers */}
+        {/* Parking location markers */}
+        {route.stops
+          .filter(stop => stop.parkingLocation)
+          .map((stop) => (
+            <Marker
+              key={`parking-${stop.order}`}
+              coordinate={{
+                latitude: stop.parkingLocation!.latitude,
+                longitude: stop.parkingLocation!.longitude,
+              }}
+              anchor={{ x: 0.5, y: 0.5 }}
+              tracksViewChanges={false}
+            >
+              <View style={styles.parkingMarker}>
+                <IconSymbol name="parkingsign.circle.fill" size={32} color="#2196F3" />
+              </View>
+            </Marker>
+          ))}
+
+        {/* Stop markers with floating title labels */}
         {route.stops.map((stop) => (
           <Marker
             key={stop.order}
@@ -335,10 +431,30 @@ export function RouteMap({ route }: RouteMapProps) {
               latitude: stop.latitude,
               longitude: stop.longitude,
             }}
-            onPress={() => setSelectedStop(stop)}
+            anchor={{ x: 0.5, y: 1 }} // Anchor at bottom center to position label above
             tracksViewChanges={false} // Performance optimization
           >
-            <StopMarker type={stop.type} stopNumber={stop.order} />
+            <TouchableOpacity
+              onPress={() => setSelectedStop(stop)}
+              style={styles.markerContainer}
+              activeOpacity={0.9}
+            >
+              {/* Floating label above marker */}
+              <View style={styles.floatingLabel}>
+                <ThemedText
+                  style={styles.floatingLabelText}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {stop.name}
+                </ThemedText>
+              </View>
+
+              {/* Marker icon below label */}
+              <View style={{ overflow: 'visible' }}>
+                <StopMarker type={stop.type} stopNumber={stop.order} />
+              </View>
+            </TouchableOpacity>
           </Marker>
         ))}
       </MapView>
@@ -442,5 +558,36 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '600',
     color: '#000000',
+  },
+  parkingMarker: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  markerContainer: {
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    overflow: 'visible',
+  },
+  floatingLabel: {
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 0, 0, 0.1)',
+    marginBottom: 4,
+    maxWidth: 180,
+    minWidth: 60,
+  },
+  floatingLabelText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#000',
+    textAlign: 'center',
   },
 });

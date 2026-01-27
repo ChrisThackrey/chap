@@ -100,3 +100,21 @@ export function getCategoryQueryString(stopType: StopType): string {
   const categories = getCategoriesForStopType(stopType);
   return categories.join(',');
 }
+
+/**
+ * Foursquare parking-related category IDs
+ * Used for finding nearby parking when a venue has limited parking
+ */
+export const PARKING_CATEGORIES = [
+  '19001', // Parking Garage
+  '19002', // Parking Lot
+  '19003', // Street Parking
+  '19004', // Parking Meter
+];
+
+/**
+ * Get parking categories as comma-separated string for API requests
+ */
+export function getParkingCategoryQueryString(): string {
+  return PARKING_CATEGORIES.join(',');
+}

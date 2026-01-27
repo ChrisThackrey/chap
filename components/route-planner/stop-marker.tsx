@@ -1,4 +1,4 @@
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, Platform } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { StopType } from '@/types/route';
@@ -33,6 +33,7 @@ const styles = StyleSheet.create({
     position: 'relative',
     width: 48,
     height: 48,
+    overflow: 'visible', // Prevent clipping of badge
   },
   iconContainer: {
     width: 48,
@@ -65,5 +66,13 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 10,
     fontWeight: 'bold',
+    lineHeight: Platform.OS === 'android' ? 12 : 10,
+    textAlign: 'center',
+    ...Platform.select({
+      android: {
+        textAlignVertical: 'center',
+        includeFontPadding: false,
+      },
+    }),
   },
 });

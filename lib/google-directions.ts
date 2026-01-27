@@ -1,4 +1,8 @@
 import Constants from 'expo-constants';
+import type { RouteCoordinate, TravelMode, RouteSegment } from '@/types/route';
+
+// Re-export for backward compatibility
+export type { RouteCoordinate } from '@/types/route';
 
 /**
  * Google Directions API Service
@@ -22,11 +26,6 @@ interface DirectionsResponse {
   }>;
   status: string;
   error_message?: string;
-}
-
-export interface RouteCoordinate {
-  latitude: number;
-  longitude: number;
 }
 
 export interface DirectionsResult {
@@ -89,8 +88,12 @@ function decodePolyline(encoded: string): RouteCoordinate[] {
 /**
  * Generate cache key for directions request
  */
-function getCacheKey(origin: RouteCoordinate, destination: RouteCoordinate): string {
-  return `${origin.latitude.toFixed(6)},${origin.longitude.toFixed(6)}->${destination.latitude.toFixed(6)},${destination.longitude.toFixed(6)}`;
+function getCacheKey(
+  origin: RouteCoordinate,
+  destination: RouteCoordinate,
+  mode: TravelMode = 'driving'
+): string {
+  return `${mode}:${origin.latitude.toFixed(6)},${origin.longitude.toFixed(6)}->${destination.latitude.toFixed(6)},${destination.longitude.toFixed(6)}`;
 }
 
 /**
@@ -98,14 +101,16 @@ function getCacheKey(origin: RouteCoordinate, destination: RouteCoordinate): str
  *
  * @param origin Starting coordinate
  * @param destination Ending coordinate
+ * @param mode Travel mode: 'driving' or 'walking'
  * @returns DirectionsResult with decoded coordinates, or null if failed
  */
 export async function fetchDirections(
   origin: RouteCoordinate,
-  destination: RouteCoordinate
+  destination: RouteCoordinate,
+  mode: TravelMode = 'driving'
 ): Promise<DirectionsResult | null> {
   // Check cache first
-  const cacheKey = getCacheKey(origin, destination);
+  const cacheKey = getCacheKey(origin, destination, mode);
   const cached = directionsCache.get(cacheKey);
   if (cached) {
     return cached;
@@ -119,7 +124,7 @@ export async function fetchDirections(
   const originStr = `${origin.latitude},${origin.longitude}`;
   const destinationStr = `${destination.latitude},${destination.longitude}`;
 
-  const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${originStr}&destination=${destinationStr}&mode=driving&key=${GOOGLE_MAPS_API_KEY}`;
+  const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${originStr}&destination=${destinationStr}&mode=${mode}&key=${GOOGLE_MAPS_API_KEY}`;
 
   try {
     const response = await fetch(url);
@@ -198,6 +203,65 @@ export async function fetchCompleteRoute(
   }
 
   return allCoordinates;
+}
+
+/**
+ * Fetch complete route with segments preserving metadata
+ * Unlike fetchCompleteRoute, this returns individual segments with their travel modes
+ *
+ * @param stops Array of stop coordinates in order
+ * @param modes Array of travel modes for each segment (parallel to stops array)
+ * @returns Array of RouteSegment objects with coordinates and metadata
+ */
+export async function fetchCompleteRouteWithSegments(
+  stops: RouteCoordinate[],
+  modes: TravelMode[]
+): Promise<RouteSegment[]> {
+  if (stops.length < 2) {
+    return [];
+  }
+
+  if (modes.length !== stops.length - 1) {
+    console.error('Modes array length must be stops.length - 1');
+    return [];
+  }
+
+  const segments: RouteSegment[] = [];
+
+  // Fetch directions for each consecutive stop pair
+  for (let i = 0; i < stops.length - 1; i++) {
+    const origin = stops[i];
+    const destination = stops[i + 1];
+    const mode = modes[i];
+
+    const result = await fetchDirections(origin, destination, mode);
+
+    if (result && result.coordinates.length > 0) {
+      segments.push({
+        id: `segment-${i}`,
+        startStop: i + 1, // 1-indexed
+        endStop: i + 2,
+        mode,
+        coordinates: result.coordinates,
+        distance: result.distance || 0,
+        duration: result.duration || 0,
+      });
+    } else {
+      // Fallback: if API fails, add straight line between stops
+      console.warn(`Falling back to straight line for segment ${i} to ${i + 1}`);
+      segments.push({
+        id: `segment-${i}`,
+        startStop: i + 1,
+        endStop: i + 2,
+        mode,
+        coordinates: [origin, destination],
+        distance: 0,
+        duration: 0,
+      });
+    }
+  }
+
+  return segments;
 }
 
 /**

@@ -29,6 +29,19 @@ export interface VenueDetails {
   website?: string; // Venue website
   phone?: string; // Phone number
   verified?: boolean; // Foursquare verified status
+  // Parking information
+  hasParking?: boolean;
+  parkingQuality?: 'ample' | 'limited' | 'street' | 'none';
+  parkingNotes?: string; // extracted from tips/categories
+}
+
+// Parking location (intermediate stop)
+export interface ParkingLocation {
+  name: string;
+  latitude: number;
+  longitude: number;
+  address: string;
+  distanceToVenue: number; // meters
 }
 
 export interface RouteStop {
@@ -41,6 +54,31 @@ export interface RouteStop {
   duration: number; // minutes
   order: number;
   venueDetails?: VenueDetails; // Optional Foursquare venue data
+  // Parking strategy information
+  parkingStrategy?: 'drive-to-venue' | 'park-and-walk';
+  parkingLocation?: ParkingLocation;
+  walkingDistance?: number; // meters
+}
+
+// Travel mode for route segments
+export type TravelMode = 'driving' | 'walking';
+
+// Route coordinate
+export interface RouteCoordinate {
+  latitude: number;
+  longitude: number;
+}
+
+// Route segment between two points
+export interface RouteSegment {
+  id: string;
+  startStop: number; // order of start stop
+  endStop: number; // order of end stop
+  mode: TravelMode;
+  coordinates: RouteCoordinate[];
+  distance: number; // meters
+  duration: number; // seconds
+  parkingLocation?: ParkingLocation;
 }
 
 export interface Route {
@@ -48,6 +86,7 @@ export interface Route {
   title: string;
   stops: RouteStop[];
   createdAt: string;
+  segments?: RouteSegment[]; // route segments with travel modes
 }
 
 export interface MapBounds {

@@ -1,5 +1,6 @@
-import { VenueDetails, VenuePhoto, StopType } from '@/types/route';
-import { getCategoryQueryString } from '@/constants/foursquare-categories';
+import { VenueDetails, VenuePhoto, StopType, ParkingLocation } from '@/types/route';
+import { getCategoryQueryString, getParkingCategoryQueryString } from '@/constants/foursquare-categories';
+import { extractParkingInfo } from './parking-detection';
 
 const FOURSQUARE_API_KEY = process.env.EXPO_PUBLIC_FOURSQUARE_API_KEY;
 const FOURSQUARE_API_BASE = 'https://api.foursquare.com/v3';
@@ -181,6 +182,9 @@ export function mapVenueToDetails(venue: FoursquareVenue): VenueDetails {
 
   const categories: string[] = (venue.categories || []).map(cat => cat.name);
 
+  // Extract parking information
+  const parkingInfo = extractParkingInfo(tips, categories);
+
   return {
     placeId: venue.fsq_id,
     rating: venue.rating,
@@ -194,6 +198,9 @@ export function mapVenueToDetails(venue: FoursquareVenue): VenueDetails {
     website: venue.website,
     phone: venue.tel,
     verified: venue.verified,
+    hasParking: parkingInfo.hasParking,
+    parkingQuality: parkingInfo.parkingQuality,
+    parkingNotes: parkingInfo.parkingNotes,
   };
 }
 
@@ -274,4 +281,59 @@ export async function searchVenuesByType(
   const query = stopType; // Use type as base query
 
   return searchNearbyVenues(query, latitude, longitude, radius, limit, categories);
+}
+
+/**
+ * Search for parking near a venue location
+ *
+ * @param latitude - Venue latitude
+ * @param longitude - Venue longitude
+ * @param radius - Search radius in meters (default: 500m)
+ * @returns Closest parking location, or null if none found
+ */
+export async function searchParkingNearVenue(
+  latitude: number,
+  longitude: number,
+  radius: number = 500
+): Promise<ParkingLocation | null> {
+  if (!FOURSQUARE_API_KEY) {
+    console.warn('Foursquare API key not configured, cannot search for parking');
+    return null;
+  }
+
+  try {
+    const categories = getParkingCategoryQueryString();
+    const venues = await searchNearbyVenues(
+      'parking',
+      latitude,
+      longitude,
+      radius,
+      5, // Limit to 5 results
+      categories
+    );
+
+    if (venues.length === 0) {
+      return null;
+    }
+
+    // Return the closest parking location
+    const closestVenue = venues[0];
+    const distance = calculateDistance(
+      latitude,
+      longitude,
+      closestVenue.geocodes.main.latitude,
+      closestVenue.geocodes.main.longitude
+    );
+
+    return {
+      name: closestVenue.name,
+      latitude: closestVenue.geocodes.main.latitude,
+      longitude: closestVenue.geocodes.main.longitude,
+      address: closestVenue.location.formatted_address || closestVenue.location.address || '',
+      distanceToVenue: distance * 1000, // Convert km to meters
+    };
+  } catch (error) {
+    console.error('Error searching for parking:', error);
+    return null;
+  }
 }
