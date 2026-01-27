@@ -14,7 +14,10 @@
         "NSLocationWhenInUseUsageDescription": "We need your location to suggest date spots near you.",
         "ITSAppUsesNonExemptEncryption": false
       },
-      "bundleIdentifier": "com.thacken5.chap"
+      "bundleIdentifier": "com.thacken5.chap",
+      "config": {
+        "googleMapsApiKey": "REDACTED_GOOGLE_MAPS_API_KEY"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -28,7 +31,13 @@
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION"
-      ]
+      ],
+      "config": {
+        "googleMaps": {
+          "apiKey": "REDACTED_GOOGLE_MAPS_API_KEY"
+        }
+      },
+      "package": "com.thacken5.chap"
     },
     "web": {
       "output": "static",
@@ -48,7 +57,12 @@
           }
         }
       ],
-      "@maplibre/maplibre-react-native"
+      [
+        "react-native-maps",
+        {
+          "playServicesLocationVersion": "21.0.1"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

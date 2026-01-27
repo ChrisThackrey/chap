@@ -1,13 +1,11 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { View, StyleSheet, TouchableOpacity } from 'react-native';
-import MapLibreGL from '@maplibre/maplibre-react-native';
+import { View, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE, PROVIDER_DEFAULT } from 'react-native-maps';
 import { ThemedText } from '@/components/themed-text';
 import { StopMarker } from './stop-marker';
 import { StopDetailModal } from './stop-detail-modal';
-import { Route, RouteStop, MapBounds } from '@/types/route';
-import { useColorScheme } from '@/hooks/use-color-scheme';
-
-MapLibreGL.setAccessToken(null); // CARTO doesn't require a token
+import { Route, RouteStop } from '@/types/route';
+import { fetchCompleteRoute, RouteCoordinate } from '@/lib/google-directions';
 
 interface RouteMapProps {
   route: Route;
@@ -15,10 +13,50 @@ interface RouteMapProps {
 
 export function RouteMap({ route }: RouteMapProps) {
   const [selectedStop, setSelectedStop] = useState<RouteStop | null>(null);
-  const [currentZoom, setCurrentZoom] = useState<number>(13);
-  const colorScheme = useColorScheme();
-  const cameraRef = useRef<any>(null);
-  const mapRef = useRef<any>(null);
+  const [routeCoordinates, setRouteCoordinates] = useState<RouteCoordinate[]>([]);
+  const [isLoadingRoute, setIsLoadingRoute] = useState(false);
+  const [currentRegion, setCurrentRegion] = useState<any>(null);
+  const [useAppleMaps, setUseAppleMaps] = useState(true); // Default to Apple Maps until Google is fixed
+  const [mapStatus, setMapStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const mapRef = useRef<MapView>(null);
+
+  // Debug: Log component mount and initial state
+  useEffect(() => {
+    console.log('🗺️ RouteMap mounted with route:', route?.stops?.length, 'stops');
+    console.log('🗺️ Route stops:', route.stops.map(s => `${s.name} (${s.latitude}, ${s.longitude})`));
+    console.log('🗺️ Map provider:', useAppleMaps ? 'Apple Maps' : 'Google Maps');
+  }, []);
+
+  // Reset map status when provider changes
+  useEffect(() => {
+    setMapStatus('loading');
+    const switchTime = Date.now();
+    console.log('🗺️ Switching to:', useAppleMaps ? 'Apple Maps' : 'Google Maps');
+
+    if (!useAppleMaps) {
+      console.log('🔑 Google Maps Configuration:');
+      console.log('   API Key: REDACTED_GOOGLE_MAPS_API_KEY');
+      console.log('   Bundle ID: com.thacken5.chap');
+      console.log('   Waiting for native map initialization...');
+
+      // Set a timeout to check if map loaded
+      const timeoutId = setTimeout(() => {
+        const elapsed = ((Date.now() - switchTime) / 1000).toFixed(1);
+        console.error(`❌ Google Maps TIMEOUT after ${elapsed} seconds`);
+        console.error('   Native map initialization FAILED');
+        console.error('   This indicates:');
+        console.error('   1. Native module not properly linked, OR');
+        console.error('   2. API key rejected by Google servers, OR');
+        console.error('   3. App needs to be rebuilt with EAS');
+        console.error('');
+        console.error('   ACTION: Check native logs in Console.app (Mac)');
+        console.error('   Filter for "Google" or "Maps" to see native errors');
+        setMapStatus('error');
+      }, 10000);
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [useAppleMaps]);
 
   // Calculate map bounds from route stops
   const bounds = useMemo(() => {
@@ -41,154 +79,265 @@ export function RouteMap({ route }: RouteMapProps) {
     };
   }, [bounds]);
 
-  // Create route line coordinates
-  const routeCoordinates = useMemo(() => {
-    return route.stops.map((stop) => [stop.longitude, stop.latitude]);
+  // Calculate initial region with appropriate deltas
+  const initialRegion = useMemo(() => {
+    const latDelta = (bounds.maxLat - bounds.minLat) * 1.5; // 1.5x padding
+    const lngDelta = (bounds.maxLng - bounds.minLng) * 1.5;
+
+    const region = {
+      latitude: center.latitude,
+      longitude: center.longitude,
+      latitudeDelta: Math.max(latDelta, 0.01), // Minimum delta for single point
+      longitudeDelta: Math.max(lngDelta, 0.01),
+    };
+
+    console.log('🗺️ Initial region calculated:', region);
+    return region;
+  }, [center, bounds]);
+
+  // Convert stops to coordinates for Directions API
+  const stopCoordinates = useMemo(() => {
+    return route.stops.map((stop) => ({
+      latitude: stop.latitude,
+      longitude: stop.longitude,
+    }));
   }, [route.stops]);
 
-  // Use MapLibre demo tiles - most reliable for React Native with full OSM street data
-  // This is the proven basemap used in MapLibre examples and CI tests
-  const mapStyle = 'https://demotiles.maplibre.org/style.json';
+  // Fetch road-following route from Google Directions API
+  useEffect(() => {
+    if (route.stops.length < 2) {
+      // Single stop, no route needed
+      setRouteCoordinates([]);
+      return;
+    }
+
+    let isMounted = true;
+    setIsLoadingRoute(true);
+
+    fetchCompleteRoute(stopCoordinates)
+      .then((coordinates) => {
+        if (isMounted) {
+          console.log('🗺️ Route coordinates loaded:', coordinates.length, 'points');
+          setRouteCoordinates(coordinates);
+          setIsLoadingRoute(false);
+        }
+      })
+      .catch((error) => {
+        console.error('❌ Error fetching route:', error);
+        if (isMounted) {
+          // Fallback to straight lines between stops
+          console.log('🗺️ Using fallback direct lines between', stopCoordinates.length, 'stops');
+          setRouteCoordinates(stopCoordinates);
+          setIsLoadingRoute(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [route.stops, stopCoordinates]);
 
   // Auto-fit map to route bounds when route changes
   useEffect(() => {
-    if (route.stops.length > 0 && cameraRef.current) {
+    if (route.stops.length > 0 && mapRef.current) {
       // Small delay to ensure map is ready
       const timer = setTimeout(() => {
         fitBounds();
-      }, 100);
+      }, 300);
 
       return () => clearTimeout(timer);
     }
-  }, [route.stops.length, bounds]);
+  }, [route.stops.length]);
 
   // Fit bounds to show all stops
   const fitBounds = () => {
-    cameraRef.current?.fitBounds(
-      [bounds.minLng, bounds.minLat], // SW corner
-      [bounds.maxLng, bounds.maxLat], // NE corner
-      [80, 80, 80, 80], // Padding [top, right, bottom, left]
-      1000 // Animation duration
-    );
-  };
+    if (!mapRef.current || route.stops.length === 0) return;
 
-  // Zoom in - increase by 1 level
-  const zoomIn = async () => {
-    const newZoom = Math.min(currentZoom + 1, 20);
-    setCurrentZoom(newZoom);
-    cameraRef.current?.setCamera({
-      zoomLevel: newZoom,
-      animationDuration: 300,
+    const coordinates = route.stops.map((stop) => ({
+      latitude: stop.latitude,
+      longitude: stop.longitude,
+    }));
+
+    mapRef.current.fitToCoordinates(coordinates, {
+      edgePadding: {
+        top: 80,
+        right: 80,
+        bottom: 80,
+        left: 80,
+      },
+      animated: true,
     });
   };
 
-  // Zoom out - decrease by 1 level
-  const zoomOut = async () => {
-    const newZoom = Math.max(currentZoom - 1, 1);
-    setCurrentZoom(newZoom);
-    cameraRef.current?.setCamera({
-      zoomLevel: newZoom,
-      animationDuration: 300,
-    });
+  // Zoom in - decrease latitudeDelta/longitudeDelta for closer view
+  const zoomIn = () => {
+    if (!mapRef.current || !currentRegion) return;
+
+    const newRegion = {
+      ...currentRegion,
+      latitudeDelta: currentRegion.latitudeDelta / 2,
+      longitudeDelta: currentRegion.longitudeDelta / 2,
+    };
+
+    mapRef.current.animateToRegion(newRegion, 300);
+  };
+
+  // Zoom out - increase latitudeDelta/longitudeDelta for wider view
+  const zoomOut = () => {
+    if (!mapRef.current || !currentRegion) return;
+
+    const newRegion = {
+      ...currentRegion,
+      latitudeDelta: currentRegion.latitudeDelta * 2,
+      longitudeDelta: currentRegion.longitudeDelta * 2,
+    };
+
+    mapRef.current.animateToRegion(newRegion, 300);
   };
 
   return (
     <View style={styles.container}>
-      <MapLibreGL.MapView
+      {/* Debug overlay - Remove this entire block once Google Maps is working */}
+      <View style={{
+        position: 'absolute',
+        top: 10,
+        left: 10,
+        zIndex: 1000,
+        backgroundColor: useAppleMaps
+          ? 'rgba(76,175,80,0.95)'
+          : mapStatus === 'ready'
+            ? 'rgba(33,150,243,0.95)'
+            : mapStatus === 'error'
+              ? 'rgba(244,67,54,0.95)'
+              : 'rgba(255,152,0,0.95)',
+        padding: 10,
+        borderRadius: 8,
+        maxWidth: '85%',
+      }}>
+        <ThemedText style={{ fontSize: 12, fontWeight: 'bold', color: 'white' }}>
+          {useAppleMaps
+            ? '✅ Apple Maps'
+            : mapStatus === 'ready'
+              ? '✅ Google Maps Working!'
+              : mapStatus === 'error'
+                ? '❌ Google Maps Error'
+                : '⏳ Loading Google Maps...'}
+        </ThemedText>
+        <ThemedText style={{ fontSize: 10, color: 'white' }}>
+          Stops: {route.stops.length} | Route: {routeCoordinates.length} pts
+        </ThemedText>
+        {!useAppleMaps && mapStatus === 'error' && (
+          <ThemedText style={{ fontSize: 9, color: 'white', marginTop: 4 }}>
+            Check console logs for details. Likely API key restrictions issue.
+          </ThemedText>
+        )}
+        {!useAppleMaps && mapStatus === 'loading' && (
+          <ThemedText style={{ fontSize: 9, color: 'white', marginTop: 4 }}>
+            Waiting for tiles... Check API restrictions if this persists.
+          </ThemedText>
+        )}
+        <TouchableOpacity
+          onPress={() => setUseAppleMaps(!useAppleMaps)}
+          style={{
+            marginTop: 6,
+            backgroundColor: 'white',
+            padding: 6,
+            borderRadius: 4,
+          }}
+        >
+          <ThemedText style={{ fontSize: 11, fontWeight: 'bold', color: '#333' }}>
+            Switch to {useAppleMaps ? 'Google' : 'Apple'}
+          </ThemedText>
+        </TouchableOpacity>
+      </View>
+
+      <MapView
         ref={mapRef}
         style={styles.map}
-        styleURL={mapStyle}
-        logoEnabled={false}
-        compassEnabled={true}
-        compassViewPosition={3}
-        compassViewMargins={{ x: 16, y: 100 }}
-        scaleBarEnabled={true}
-        scaleBarPosition={{ bottom: 80, left: 16 }}
-        attributionEnabled={true}
-        attributionPosition={{ bottom: 8, right: 8 }}
+        provider={useAppleMaps ? PROVIDER_DEFAULT : PROVIDER_GOOGLE}
+        initialRegion={initialRegion}
+        key={useAppleMaps ? 'apple-maps' : 'google-maps'}
+        showsCompass={true}
+        showsScale={true}
+        showsMyLocationButton={false}
         rotateEnabled={true}
         scrollEnabled={true}
         pitchEnabled={true}
         zoomEnabled={true}
-        onRegionDidChange={async () => {
-          if (cameraRef.current) {
-            const zoom = await cameraRef.current.getZoom();
-            if (zoom) setCurrentZoom(zoom);
+        onRegionChangeComplete={(region) => {
+          setCurrentRegion(region);
+          if (!useAppleMaps) {
+            console.log('🗺️ Google Maps region changed - map is interactive');
           }
         }}
+        onMapReady={() => {
+          console.log('✅ MapView onMapReady called - native map initialized');
+          console.log(`   Provider: ${useAppleMaps ? 'Apple Maps' : 'Google Maps'}`);
+          console.log(`   Timestamp: ${new Date().toISOString()}`);
+          setMapStatus('ready');
+        }}
+        onMapLoaded={() => {
+          console.log('✅ MapView onMapLoaded called - tiles should be visible');
+          console.log(`   Timestamp: ${new Date().toISOString()}`);
+          setMapStatus('ready');
+        }}
       >
-        <MapLibreGL.Camera
-          ref={cameraRef}
-          defaultSettings={{
-            centerCoordinate: [center.longitude, center.latitude],
-            zoomLevel: 13,
-            animationMode: "flyTo",
-            animationDuration: 1000,
-          }}
-          minZoomLevel={10}
-          maxZoomLevel={18}
-        />
-
-        {/* Route line */}
-        <MapLibreGL.ShapeSource
-          id="routeSource"
-          shape={{
-            type: 'Feature',
-            properties: {},
-            geometry: {
-              type: 'LineString',
-              coordinates: routeCoordinates,
-            },
-          }}
-        >
-          {/* Route line outline (shadow effect) */}
-          <MapLibreGL.LineLayer
-            id="routeLineOutline"
-            style={{
-              lineColor: '#000000',
-              lineWidth: 10,
-              lineOpacity: 0.3,
-              lineBlur: 3,
-            }}
-            belowLayerID="routeLine"
-          />
-          {/* Main route line - yellow to match icon styling */}
-          <MapLibreGL.LineLayer
-            id="routeLine"
-            style={{
-              lineColor: '#FFD700',
-              lineWidth: 6,
-              lineOpacity: 1.0,
-              lineCap: 'round',
-              lineJoin: 'round',
-            }}
-          />
-          {/* Route line inner glow for visibility */}
-          <MapLibreGL.LineLayer
-            id="routeLineGlow"
-            style={{
-              lineColor: '#FFF8DC',
-              lineWidth: 3,
-              lineOpacity: 0.8,
-              lineCap: 'round',
-              lineJoin: 'round',
-            }}
-          />
-        </MapLibreGL.ShapeSource>
+        {/* Route lines - only render if we have coordinates and not loading */}
+        {!isLoadingRoute && routeCoordinates.length > 0 && (
+          <>
+            {/* Shadow layer for depth effect */}
+            <Polyline
+              coordinates={routeCoordinates}
+              strokeColor="rgba(0, 0, 0, 0.3)"
+              strokeWidth={10}
+              lineCap="round"
+              lineJoin="round"
+            />
+            {/* Main yellow route line */}
+            <Polyline
+              coordinates={routeCoordinates}
+              strokeColor="#FFD700"
+              strokeWidth={6}
+              lineCap="round"
+              lineJoin="round"
+            />
+            {/* Inner glow for visibility */}
+            <Polyline
+              coordinates={routeCoordinates}
+              strokeColor="#FFF8DC"
+              strokeWidth={3}
+              lineCap="round"
+              lineJoin="round"
+            />
+          </>
+        )}
 
         {/* Stop markers */}
         {route.stops.map((stop) => (
-          <MapLibreGL.MarkerView
+          <Marker
             key={stop.order}
-            id={`marker-${stop.order}`}
-            coordinate={[stop.longitude, stop.latitude]}
+            identifier={`marker-${stop.order}`}
+            coordinate={{
+              latitude: stop.latitude,
+              longitude: stop.longitude,
+            }}
+            onPress={() => setSelectedStop(stop)}
+            tracksViewChanges={false} // Performance optimization
           >
-            <TouchableOpacity onPress={() => setSelectedStop(stop)}>
-              <StopMarker type={stop.type} stopNumber={stop.order} />
-            </TouchableOpacity>
-          </MapLibreGL.MarkerView>
+            <StopMarker type={stop.type} stopNumber={stop.order} />
+          </Marker>
         ))}
-      </MapLibreGL.MapView>
+      </MapView>
+
+      {/* Loading indicator for route fetching */}
+      {isLoadingRoute && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="large" color="#FFD700" />
+          <ThemedText style={styles.loadingText}>
+            Loading route...
+          </ThemedText>
+        </View>
+      )}
 
       {/* Map Controls */}
       <View style={styles.mapControls}>
@@ -228,6 +377,29 @@ const styles = StyleSheet.create({
   },
   map: {
     flex: 1,
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: [{ translateX: -60 }, { translateY: -40 }],
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 12,
+    padding: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+    minWidth: 120,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
   },
   mapControls: {
     position: 'absolute',

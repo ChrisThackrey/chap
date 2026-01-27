@@ -119,10 +119,12 @@ export default function RoutePlannerScreen() {
       )}
 
       {state === 'success' && route && (
-        <>
+        <View style={{ flex: 1 }}>
           <RouteSummary route={route} onSave={handleSave} onRegenerate={reset} />
-          <RouteMap route={route} />
-        </>
+          <View style={{ flex: 1 }}>
+            <RouteMap route={route} />
+          </View>
+        </View>
       )}
     </ThemedView>
   );
