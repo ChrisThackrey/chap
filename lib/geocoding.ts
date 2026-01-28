@@ -93,3 +93,76 @@ export async function geocodeStops(stops: Partial<RouteStop>[]): Promise<RouteSt
 
   return results;
 }
+
+interface NominatimReverseResponse {
+  lat: string;
+  lon: string;
+  display_name: string;
+  address: {
+    house_number?: string;
+    road?: string;
+    city?: string;
+    town?: string;
+    village?: string;
+    state?: string;
+    postcode?: string;
+    country?: string;
+  };
+}
+
+/**
+ * Reverse geocode coordinates to a street address using Nominatim (OpenStreetMap)
+ * Free service, no API key required
+ * Rate limit: 1 request/second
+ */
+export async function reverseGeocode(
+  latitude: number,
+  longitude: number
+): Promise<string> {
+  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&addressdetails=1`;
+
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent': 'ChapDatingApp/1.0',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Nominatim reverse geocoding error: ${response.statusText}`);
+  }
+
+  const data: NominatimReverseResponse = await response.json();
+
+  if (!data || !data.address) {
+    throw new Error(`Could not reverse geocode coordinates: ${latitude}, ${longitude}`);
+  }
+
+  return formatStreetAddress(data.address);
+}
+
+/**
+ * Format address components into a readable street address
+ */
+function formatStreetAddress(address: NominatimReverseResponse['address']): string {
+  const parts: string[] = [];
+
+  // Street address (house number + road)
+  if (address.house_number && address.road) {
+    parts.push(`${address.house_number} ${address.road}`);
+  } else if (address.road) {
+    parts.push(address.road);
+  }
+
+  // City/town/village
+  const locality = address.city || address.town || address.village;
+  if (locality) {
+    parts.push(locality);
+  }
+
+  // State with optional postcode
+  if (address.state) {
+    parts.push(address.postcode ? `${address.state} ${address.postcode}` : address.state);
+  }
+
+  return parts.join(', ');
+}

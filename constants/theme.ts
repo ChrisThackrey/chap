@@ -5,25 +5,135 @@
 
 import { Platform } from 'react-native';
 
-const tintColorLight = '#0a7ea4';
-const tintColorDark = '#fff';
+// Tailwind CSS default color palette
+export const tailwind = {
+  // Blue (primary)
+  blue50: '#EFF6FF',
+  blue100: '#DBEAFE',
+  blue200: '#BFDBFE',
+  blue400: '#60A5FA',
+  blue500: '#3B82F6',
+  blue600: '#2563EB',
+  blue700: '#1D4ED8',
+  // Indigo
+  indigo500: '#6366F1',
+  indigo600: '#4F46E5',
+  // Yellow (route)
+  yellow300: '#FDE047',
+  yellow400: '#FACC15',
+  yellow500: '#EAB308',
+  yellow600: '#CA8A04',
+  // Amber
+  amber400: '#FBBF24',
+  amber500: '#F59E0B',
+  // Gray
+  gray50: '#F9FAFB',
+  gray100: '#F3F4F6',
+  gray200: '#E5E7EB',
+  gray300: '#D1D5DB',
+  gray400: '#9CA3AF',
+  gray500: '#6B7280',
+  gray600: '#4B5563',
+  gray700: '#374151',
+  gray800: '#1F2937',
+  gray900: '#111827',
+  // Slate (for dark mode and UI elements)
+  slate300: '#CBD5E1',
+  slate400: '#94A3B8',
+  slate500: '#64748B',
+  slate600: '#475569',
+  slate800: '#1E293B',
+  slate900: '#0F172A',
+  // Emerald (success)
+  emerald500: '#10B981',
+  emerald600: '#059669',
+};
+
+const tintColorLight = tailwind.blue500;
+const tintColorDark = tailwind.blue400;
 
 export const Colors = {
   light: {
-    text: '#11181C',
-    background: '#fff',
+    text: tailwind.gray900,
+    background: '#FFFFFF',
     tint: tintColorLight,
-    icon: '#687076',
-    tabIconDefault: '#687076',
+    icon: tailwind.gray500,
+    tabIconDefault: tailwind.gray400,
     tabIconSelected: tintColorLight,
+    // Extended palette
+    textSecondary: tailwind.gray600,
+    border: tailwind.gray200,
+    surface: tailwind.gray50,
+    surfaceHover: tailwind.gray100,
   },
   dark: {
-    text: '#ECEDEE',
-    background: '#151718',
+    text: tailwind.slate300,
+    background: tailwind.slate900,
     tint: tintColorDark,
-    icon: '#9BA1A6',
-    tabIconDefault: '#9BA1A6',
+    icon: tailwind.slate400,
+    tabIconDefault: tailwind.slate400,
     tabIconSelected: tintColorDark,
+    // Extended palette
+    textSecondary: tailwind.slate400,
+    border: tailwind.slate800,
+    surface: tailwind.slate800,
+    surfaceHover: tailwind.gray800,
+  },
+};
+
+/**
+ * Map-specific color palette for route visualization
+ * Uses classic gold/green route colors for good visibility
+ */
+export const MapColors = {
+  // Route line colors - gold for driving, green for walking
+  route: {
+    driving: {
+      main: '#FFD700',                  // Gold - primary driving route
+      glow: '#FFF8DC',                  // Cornsilk - inner glow
+      shadow: 'rgba(0, 0, 0, 0.3)',     // Dark shadow for depth
+    },
+    walking: {
+      main: '#4CAF50',                  // Green - walking route
+      glow: '#81C784',                  // Light green - inner glow
+      shadow: 'rgba(0, 0, 0, 0.3)',     // Dark shadow for depth
+    },
+  },
+
+  // Offset indicator line (for overlapping stops)
+  offsetIndicator: tailwind.slate500,
+
+  // Radius selector circle
+  radius: {
+    stroke: 'rgba(59, 130, 246, 0.8)',   // Blue stroke
+    fill: 'rgba(59, 130, 246, 0.12)',    // Light blue fill
+  },
+
+  // Map control buttons
+  controls: {
+    background: '#FFFFFF',
+    backgroundPressed: tailwind.gray100,
+    icon: tailwind.gray700,
+    border: tailwind.gray200,
+    shadow: 'rgba(0, 0, 0, 0.1)',
+  },
+
+  // Floating labels
+  label: {
+    background: 'rgba(255, 255, 255, 0.98)',
+    text: tailwind.gray800,
+    border: 'rgba(59, 130, 246, 0.2)',
+    shadow: 'rgba(0, 0, 0, 0.1)',
+  },
+
+  // Parking marker
+  parking: tailwind.blue500,
+
+  // Loading indicator
+  loading: {
+    background: 'rgba(255, 255, 255, 0.98)',
+    spinner: tailwind.blue500,
+    text: tailwind.gray700,
   },
 };
 

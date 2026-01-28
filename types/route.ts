@@ -9,6 +9,16 @@ export type StopType =
   | 'activity'
   | 'shopping';
 
+/**
+ * Citation from web search results for a venue
+ */
+export interface VenueCitation {
+  url: string;
+  title?: string;
+  startIndex: number;
+  endIndex: number;
+}
+
 export interface VenuePhoto {
   prefix: string;
   suffix: string;
@@ -61,6 +71,9 @@ export interface RouteStop {
   // Validation information
   validationStatus?: 'verified' | 'geocoded' | 'approximated' | 'fallback';
   validationWarnings?: string[];
+  // Web search information
+  citations?: VenueCitation[];
+  webSearchUsed?: boolean;
 }
 
 // Travel mode for route segments

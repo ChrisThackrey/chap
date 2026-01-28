@@ -121,7 +121,14 @@ export async function searchNearbyVenues(
   });
 
   if (!response.ok) {
-    // Handle 410 Gone silently - API deprecated for this account
+    // Handle 401 Unauthorized - invalid API key
+    if (response.status === 401) {
+      foursquareApiDeprecated = true;
+      console.warn('Foursquare API key invalid (401 Unauthorized). Falling back to geocoding.');
+      console.warn('Get a valid v3 API key at: https://location.foursquare.com/developer/');
+      return [];
+    }
+    // Handle 410 Gone - API deprecated for this account
     if (response.status === 410) {
       foursquareApiDeprecated = true;
       console.warn('Foursquare V3 API unavailable (410 Gone). Falling back to geocoding.');
@@ -174,8 +181,8 @@ export async function getPlaceDetails(placeId: string): Promise<FoursquareVenue 
   );
 
   if (!response.ok) {
-    if (response.status === 404 || response.status === 410) {
-      if (response.status === 410) {
+    if (response.status === 401 || response.status === 404 || response.status === 410) {
+      if (response.status === 401 || response.status === 410) {
         foursquareApiDeprecated = true;
       }
       return null;

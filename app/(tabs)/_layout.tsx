@@ -15,6 +15,11 @@ export default function TabLayout() {
         tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
         headerShown: false,
         tabBarButton: HapticTab,
+        tabBarStyle: {
+          height: 60,
+          paddingBottom: 8,
+          paddingTop: 4,
+        },
       }}>
       <Tabs.Screen
         name="route-planner"

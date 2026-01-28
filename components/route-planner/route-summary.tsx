@@ -57,14 +57,8 @@ export function RouteSummary({ route, onSave, onRegenerate }: RouteSummaryProps)
           {route.title}
         </ThemedText>
 
-        <View style={styles.metaContainer}>
-          <ThemedText style={styles.meta}>
-            ⭐ {route.stops.length} stops • {durationText}
-          </ThemedText>
-        </View>
-
-        {/* Validation badges */}
-        {(verifiedCount > 0 || approximateCount > 0) && (
+        {/* Validation badges row with meta info on right */}
+        <View style={styles.badgesRow}>
           <View style={styles.validationBadges}>
             {verifiedCount > 0 && (
               <View style={[styles.badge, styles.verifiedBadge]}>
@@ -82,7 +76,13 @@ export function RouteSummary({ route, onSave, onRegenerate }: RouteSummaryProps)
               </View>
             )}
           </View>
-        )}
+
+          <View style={styles.metaContainer}>
+            <ThemedText style={styles.meta}>
+              ⭐ {route.stops.length} stops • {durationText}
+            </ThemedText>
+          </View>
+        </View>
       </View>
 
       <View style={styles.actions}>
@@ -113,7 +113,9 @@ export function RouteSummary({ route, onSave, onRegenerate }: RouteSummaryProps)
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingTop: 48,
+    paddingBottom: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',
   },
@@ -124,9 +126,16 @@ const styles = StyleSheet.create({
     fontSize: 20,
     marginBottom: 8,
   },
+  badgesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   metaContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexShrink: 0,
+    marginLeft: 8,
   },
   meta: {
     fontSize: 14,
@@ -156,7 +165,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 6,
-    marginTop: 8,
+    flex: 1,
   },
   badge: {
     paddingHorizontal: 8,

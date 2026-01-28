@@ -47,6 +47,7 @@ export type ErrorType =
   | 'GEOCODING_FAILED'
   | 'LOW_CONFIDENCE'
   | 'REGION_MISMATCH'
+  | 'WEB_SEARCH_FAILED'
   | 'UNKNOWN';
 
 export interface ClassifiedError {

@@ -9,9 +9,29 @@ import type { ClassifiedError } from '@/types/validation';
  * Classifies errors by type and provides handling guidance
  */
 export function classifyError(error: Error | any): ClassifiedError {
+  // Check for Responses API errors (web search)
+  if (error.name === 'ResponsesAPIError') {
+    return classifyResponsesAPIError(error);
+  }
+
   // Check for Foursquare API errors
   if (error.name === 'FoursquareAPIError' || error.statusCode) {
     return classifyAPIError(error);
+  }
+
+  // Check for web search specific errors
+  if (
+    error.message?.includes('web_search') ||
+    error.message?.includes('Responses API')
+  ) {
+    return {
+      type: 'WEB_SEARCH_FAILED',
+      originalError: error,
+      isRecoverable: true,
+      shouldRetry: false,
+      userMessage: 'Web search failed. Falling back to standard venue generation.',
+      suggestedAction: 'Try again without web search keywords',
+    };
   }
 
   // Check for network errors
@@ -140,6 +160,72 @@ function classifyAPIError(error: any): ClassifiedError {
         isRecoverable: true,
         shouldRetry: false,
         userMessage: `API error (${statusCode}): ${error.message || 'Unknown error'}`,
+        statusCode,
+      };
+  }
+}
+
+/**
+ * Classifies Responses API errors (web search)
+ */
+function classifyResponsesAPIError(error: any): ClassifiedError {
+  const statusCode = error.statusCode || error.status;
+
+  switch (statusCode) {
+    case 401:
+      return {
+        type: 'AUTH_INVALID',
+        originalError: error,
+        isRecoverable: false,
+        shouldRetry: false,
+        userMessage: 'OpenAI API authentication failed.',
+        suggestedAction: 'Check your EXPO_PUBLIC_OPENAI_API_KEY in .env file',
+        statusCode,
+      };
+
+    case 429:
+      return {
+        type: 'RATE_LIMITED',
+        originalError: error,
+        isRecoverable: true,
+        shouldRetry: true,
+        userMessage: 'OpenAI rate limit exceeded. Will retry...',
+        suggestedAction: 'Please wait a moment',
+        statusCode,
+      };
+
+    case 400:
+      // Bad request - likely web search not available for this request
+      return {
+        type: 'WEB_SEARCH_FAILED',
+        originalError: error,
+        isRecoverable: true,
+        shouldRetry: false,
+        userMessage: 'Web search request failed. Using standard generation.',
+        suggestedAction: 'Web search may not be available for this query',
+        statusCode,
+      };
+
+    case 500:
+    case 502:
+    case 503:
+    case 504:
+      return {
+        type: 'NETWORK_ERROR',
+        originalError: error,
+        isRecoverable: true,
+        shouldRetry: true,
+        userMessage: 'OpenAI API temporarily unavailable. Will retry...',
+        statusCode,
+      };
+
+    default:
+      return {
+        type: 'WEB_SEARCH_FAILED',
+        originalError: error,
+        isRecoverable: true,
+        shouldRetry: false,
+        userMessage: `Web search error (${statusCode}): ${error.message || 'Unknown error'}`,
         statusCode,
       };
   }
