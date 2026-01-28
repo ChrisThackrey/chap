@@ -21,7 +21,7 @@ export function VenueTips({ tips }: VenueTipsProps) {
       {tips.map((tip, index) => (
         <View key={index} style={styles.tipContainer}>
           <View style={styles.quoteMark}>
-            <ThemedText style={styles.quoteText}>"</ThemedText>
+            <ThemedText style={styles.quoteText}>&ldquo;</ThemedText>
           </View>
           <ThemedText style={styles.tipText}>{tip}</ThemedText>
         </View>

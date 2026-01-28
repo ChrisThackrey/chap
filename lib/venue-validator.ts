@@ -31,7 +31,10 @@ const VALIDATION_CONFIG = {
   RANDOMNESS_FACTOR: 0.3, // Factor for adding randomness to venue selection (0-1)
 };
 
-// Store search keywords globally for use in scoring
+// Store search keywords for use in scoring
+// NOTE: This is module-level state. In a single-user mobile app context,
+// concurrent validation calls are rare. If concurrent calls become an issue,
+// refactor to pass keywords through the function chain.
 let currentSearchKeywords: string[] = [];
 
 /**

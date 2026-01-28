@@ -9,7 +9,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Route, RouteStop, RouteSegment } from '@/types/route';
 import { fetchCompleteRoute, RouteCoordinate } from '@/lib/google-directions';
 import { optimizeRouteForParking } from '@/lib/route-optimizer';
-import { MapColors } from '@/constants/theme';
+import { MapColors, tailwind } from '@/constants/theme';
 
 // Animation configuration
 const ANIMATION_CONFIG = {
@@ -210,6 +210,19 @@ export function RouteMap({
   const [selectedStop, setSelectedStop] = useState<RouteStop | null>(null);
   const [showAddStopModal, setShowAddStopModal] = useState(false);
   const [showAddStopTooltip, setShowAddStopTooltip] = useState(false);
+  const [previousStopCount, setPreviousStopCount] = useState(route.stops.length);
+
+  // Close modal when a stop is successfully added (stop count increased and not loading)
+  useEffect(() => {
+    if (route.stops.length > previousStopCount && !isAddingStop) {
+      // A new stop was added successfully
+      setShowAddStopModal(false);
+      setPreviousStopCount(route.stops.length);
+    } else if (route.stops.length !== previousStopCount) {
+      // Stop count changed (could be deletion), update tracking
+      setPreviousStopCount(route.stops.length);
+    }
+  }, [route.stops.length, isAddingStop, previousStopCount]);
   const [routeCoordinates, setRouteCoordinates] = useState<RouteCoordinate[]>([]);
   const [routeSegments, setRouteSegments] = useState<RouteSegment[]>([]);
   const [isLoadingRoute, setIsLoadingRoute] = useState(false);
@@ -222,23 +235,114 @@ export function RouteMap({
   // Calculate offset positions for overlapping stops
   const stopsWithOffsets = useMemo(() => calculateStopPositions(route.stops), [route.stops]);
 
-  // Animation values for markers - initialize to 1 for immediate visibility
-  // Animation will enhance the experience but markers are visible by default
-  const markerAnimations = useRef<Animated.Value[]>(
-    route.stops.map(() => new Animated.Value(1))
-  ).current;
-  // Initialize marker scales to 1 for immediate visibility
-  const markerScales = useRef<Animated.Value[]>(
-    route.stops.map(() => new Animated.Value(1))
-  ).current;
+  // Animation values for markers - use Maps keyed by stop.order to handle insertions correctly
+  const markerAnimationsRef = useRef<Map<number, Animated.Value>>(new Map());
+  const markerScalesRef = useRef<Map<number, Animated.Value>>(new Map());
+  const prevStopOrdersRef = useRef<Set<number>>(new Set());
+
+  // Update animation Maps when stops change - keyed by stop.order for correct insertion handling
+  useEffect(() => {
+    const currentOrders = new Set(route.stops.map(s => s.order));
+    const prevOrders = prevStopOrdersRef.current;
+
+    // Find new stops (orders that exist now but didn't before)
+    const newOrders: number[] = [];
+    currentOrders.forEach(order => {
+      if (!prevOrders.has(order)) {
+        newOrders.push(order);
+      }
+    });
+
+    // Find removed stops (orders that existed before but don't now)
+    const removedOrders: number[] = [];
+    prevOrders.forEach(order => {
+      if (!currentOrders.has(order)) {
+        removedOrders.push(order);
+      }
+    });
+
+    // Initialize animation values for new stops
+    if (newOrders.length > 0) {
+      console.log(`📍 Adding animation values for new stop(s) with orders: ${newOrders.join(', ')}`);
+
+      newOrders.forEach(order => {
+        // Start at 0 for new stops (will animate in)
+        markerAnimationsRef.current.set(order, new Animated.Value(0));
+        markerScalesRef.current.set(order, new Animated.Value(0));
+      });
+
+      // Animate the new markers after a short delay
+      setTimeout(() => {
+        newOrders.forEach(order => {
+          const scaleAnim = markerScalesRef.current.get(order);
+          const opacityAnim = markerAnimationsRef.current.get(order);
+
+          if (scaleAnim) {
+            // Pop-in animation for new marker
+            Animated.spring(scaleAnim, {
+              toValue: 1.2,
+              friction: 5,
+              tension: 100,
+              useNativeDriver: true,
+            }).start(() => {
+              Animated.spring(scaleAnim, {
+                toValue: 1,
+                friction: 8,
+                tension: 120,
+                useNativeDriver: true,
+              }).start();
+            });
+          }
+
+          if (opacityAnim) {
+            Animated.timing(opacityAnim, {
+              toValue: 1,
+              duration: 300,
+              useNativeDriver: true,
+            }).start();
+          }
+        });
+      }, 100);
+
+      // Fit map to show all stops including new one
+      setTimeout(() => {
+        mapRef.current?.fitToCoordinates(
+          route.stops.map(s => ({ latitude: s.latitude, longitude: s.longitude })),
+          { edgePadding: { top: 100, right: 60, bottom: 100, left: 60 }, animated: true }
+        );
+      }, 300);
+    }
+
+    // Clean up animation values for removed stops
+    if (removedOrders.length > 0) {
+      console.log(`📍 Removing animation values for removed stop(s) with orders: ${removedOrders.join(', ')}`);
+      removedOrders.forEach(order => {
+        markerAnimationsRef.current.delete(order);
+        markerScalesRef.current.delete(order);
+      });
+    }
+
+    // Ensure all current stops have animation values (for initial load)
+    route.stops.forEach(stop => {
+      if (!markerAnimationsRef.current.has(stop.order)) {
+        markerAnimationsRef.current.set(stop.order, new Animated.Value(1));
+      }
+      if (!markerScalesRef.current.has(stop.order)) {
+        markerScalesRef.current.set(stop.order, new Animated.Value(1));
+      }
+    });
+
+    prevStopOrdersRef.current = currentOrders;
+  }, [route.stops]);
   // Initialize controls opacity to 0 (will fade in)
   const controlsOpacity = useRef(new Animated.Value(0)).current;
 
-  // Debug: Log component mount and initial state
+  // Debug: Log component mount and initial state (intentionally runs only on mount)
   useEffect(() => {
     console.log('🗺️ RouteMap mounted with route:', route?.stops?.length, 'stops');
     console.log('🗺️ Route stops:', route.stops.map(s => `${s.name} (${s.latitude}, ${s.longitude})`));
     console.log('🗺️ Map provider: Google Maps');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Set up Google Maps initialization timeout
@@ -394,29 +498,37 @@ export function RouteMap({
       // Animate markers with staggered pop-in effect (scale 0 → 1.15 → 1)
       const markerTimer = setTimeout(() => {
         console.log('🎬 Animating markers with bounce effect');
-        route.stops.forEach((_, index) => {
+        route.stops.forEach((stop, index) => {
           setTimeout(() => {
-            // First animate to slightly larger than normal (overshoot)
-            Animated.spring(markerScales[index], {
-              toValue: 1.15,
-              friction: 6,
-              tension: 100,
-              useNativeDriver: true,
-            }).start(() => {
-              // Then settle back to normal size
-              Animated.spring(markerScales[index], {
+            const scaleAnim = markerScalesRef.current.get(stop.order);
+            const opacityAnim = markerAnimationsRef.current.get(stop.order);
+
+            if (scaleAnim) {
+              // First animate to slightly larger than normal (overshoot)
+              Animated.spring(scaleAnim, {
+                toValue: 1.15,
+                friction: 6,
+                tension: 100,
+                useNativeDriver: true,
+              }).start(() => {
+                // Then settle back to normal size
+                Animated.spring(scaleAnim, {
+                  toValue: 1,
+                  friction: 8,
+                  tension: 120,
+                  useNativeDriver: true,
+                }).start();
+              });
+            }
+
+            if (opacityAnim) {
+              // Fade in the marker
+              Animated.timing(opacityAnim, {
                 toValue: 1,
-                friction: 8,
-                tension: 120,
+                duration: 200,
                 useNativeDriver: true,
               }).start();
-            });
-            // Also fade in the marker
-            Animated.timing(markerAnimations[index], {
-              toValue: 1,
-              duration: 200,
-              useNativeDriver: true,
-            }).start();
+            }
           }, index * ANIMATION_CONFIG.MARKER_STAGGER_DELAY);
         });
       }, 200); // Small delay to let map settle
@@ -433,7 +545,7 @@ export function RouteMap({
         clearTimeout(markerTimer);
       };
     }
-  }, [mapStatus, route.stops.length, hasAnimatedIn, markerAnimations, markerScales, controlsOpacity]);
+  }, [mapStatus, route.stops, hasAnimatedIn, controlsOpacity]);
 
   // Fit bounds to show all stops
   const fitBounds = () => {
@@ -655,7 +767,7 @@ export function RouteMap({
         {/* Parking location markers - animated */}
         {route.stops
           .filter(stop => stop.parkingLocation)
-          .map((stop, index) => (
+          .map((stop) => (
             <Marker
               key={`parking-${stop.order}`}
               coordinate={{
@@ -669,8 +781,8 @@ export function RouteMap({
                 style={[
                   styles.parkingMarker,
                   {
-                    opacity: markerAnimations[index] || 1,
-                    transform: [{ scale: markerScales[index] || 1 }],
+                    opacity: markerAnimationsRef.current.get(stop.order) ?? new Animated.Value(1),
+                    transform: [{ scale: markerScalesRef.current.get(stop.order) ?? new Animated.Value(1) }],
                   },
                 ]}
               >
@@ -697,7 +809,7 @@ export function RouteMap({
           ))}
 
         {/* Stop markers with floating title labels - using offset positions */}
-        {stopsWithOffsets.map(({ stop, displayLat, displayLng }, index) => (
+        {stopsWithOffsets.map(({ stop, displayLat, displayLng }) => (
           <Marker
             key={stop.order}
             identifier={`marker-${stop.order}`}
@@ -713,9 +825,9 @@ export function RouteMap({
               style={[
                 styles.markerContainer,
                 {
-                  opacity: markerAnimations[index] || 1,
+                  opacity: markerAnimationsRef.current.get(stop.order) ?? new Animated.Value(1),
                   transform: [
-                    { scale: markerScales[index] || 1 },
+                    { scale: markerScalesRef.current.get(stop.order) ?? new Animated.Value(1) },
                   ],
                 },
               ]}
@@ -820,8 +932,9 @@ export function RouteMap({
           visible={showAddStopModal}
           onClose={() => setShowAddStopModal(false)}
           onSubmit={(prompt) => {
+            // Don't close modal here - let it stay open during loading
+            // Modal will be closed via useEffect when isAddingStop becomes false
             onAddStop(prompt);
-            setShowAddStopModal(false);
           }}
           isLoading={isAddingStop}
           error={addStopError}
@@ -906,7 +1019,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#3B82F6',
+    backgroundColor: tailwind.blue500,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 20,

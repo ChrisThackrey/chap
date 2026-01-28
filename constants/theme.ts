@@ -26,6 +26,10 @@ export const tailwind = {
   // Amber
   amber400: '#FBBF24',
   amber500: '#F59E0B',
+  // Red (errors)
+  red50: '#FEF2F2',
+  red500: '#EF4444',
+  red600: '#DC2626',
   // Gray
   gray50: '#F9FAFB',
   gray100: '#F3F4F6',
@@ -103,10 +107,10 @@ export const MapColors = {
   // Offset indicator line (for overlapping stops)
   offsetIndicator: tailwind.slate500,
 
-  // Radius selector circle
+  // Radius selector circle (uses blue500 #3B82F6 = rgb(59, 130, 246))
   radius: {
-    stroke: 'rgba(59, 130, 246, 0.8)',   // Blue stroke
-    fill: 'rgba(59, 130, 246, 0.12)',    // Light blue fill
+    stroke: `${tailwind.blue500}CC`,     // Blue stroke with 80% opacity
+    fill: `${tailwind.blue500}1F`,       // Light blue fill with 12% opacity
   },
 
   // Map control buttons
@@ -122,7 +126,7 @@ export const MapColors = {
   label: {
     background: 'rgba(255, 255, 255, 0.98)',
     text: tailwind.gray800,
-    border: 'rgba(59, 130, 246, 0.2)',
+    border: `${tailwind.blue500}33`,    // Blue with 20% opacity
     shadow: 'rgba(0, 0, 0, 0.1)',
   },
 

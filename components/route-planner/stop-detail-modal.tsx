@@ -1,5 +1,6 @@
 import { Modal, View, TouchableOpacity, StyleSheet, Linking, Platform, ScrollView, Dimensions } from 'react-native';
 import { Image } from 'expo-image';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -11,9 +12,8 @@ import { buildPhotoUrl } from '@/lib/foursquare';
 import { VenueHours } from './venue-hours';
 import { VenueTips } from './venue-tips';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const HERO_IMAGE_HEIGHT = 180;
-const BOTTOM_SAFE_AREA = 90; // Tab bar + safe area padding
 
 /**
  * Parse address string into components
@@ -41,6 +41,13 @@ interface StopDetailModalProps {
 export function StopDetailModal({ stop, totalStops, visible, onClose }: StopDetailModalProps) {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
+  const insets = useSafeAreaInsets();
+
+  // Calculate safe bottom padding (minimum 20px, or device safe area + extra padding)
+  const bottomPadding = Math.max(20, insets.bottom + 8);
+
+  // Calculate max modal height (70% of screen, leaving room for status bar area)
+  const maxModalHeight = SCREEN_HEIGHT * 0.7;
 
   if (!stop) return null;
 
@@ -77,7 +84,7 @@ export function StopDetailModal({ stop, totalStops, visible, onClose }: StopDeta
         <TouchableOpacity
           activeOpacity={1}
           onPress={(e) => e.stopPropagation()}
-          style={styles.modalContainer}
+          style={[styles.modalContainer, { maxHeight: maxModalHeight }]}
         >
           <ThemedView style={[styles.modal, { backgroundColor: colors.background }]}>
             {/* Hero Image */}
@@ -222,19 +229,21 @@ export function StopDetailModal({ stop, totalStops, visible, onClose }: StopDeta
                 {stop.venueDetails?.tips && stop.venueDetails.tips.length > 0 && (
                   <VenueTips tips={stop.venueDetails.tips} />
                 )}
-
-                {/* Directions Button */}
-                <TouchableOpacity
-                  style={[styles.directionsButton, { backgroundColor: MapColors.route.driving.main }]}
-                  onPress={handleGetDirections}
-                >
-                  <IconSymbol name="arrow.triangle.turn.up.right.diamond.fill" size={20} color="#FFFFFF" />
-                  <ThemedText style={styles.directionsButtonText}>
-                    Get Directions
-                  </ThemedText>
-                </TouchableOpacity>
               </View>
             </ScrollView>
+
+            {/* Directions Button - Fixed at bottom, outside ScrollView */}
+            <View style={[styles.directionsContainer, { paddingBottom: bottomPadding }]}>
+              <TouchableOpacity
+                style={[styles.directionsButton, { backgroundColor: MapColors.route.driving.main }]}
+                onPress={handleGetDirections}
+              >
+                <IconSymbol name="arrow.triangle.turn.up.right.diamond.fill" size={20} color="#FFFFFF" />
+                <ThemedText style={styles.directionsButtonText}>
+                  Get Directions
+                </ThemedText>
+              </TouchableOpacity>
+            </View>
           </ThemedView>
         </TouchableOpacity>
       </TouchableOpacity>
@@ -249,7 +258,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalContainer: {
-    maxHeight: '75%',
+    // maxHeight is set dynamically via inline style
   },
   modal: {
     borderTopLeftRadius: 24,
@@ -288,7 +297,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   scrollView: {
-    maxHeight: 450,
+    flexShrink: 1,
   },
   header: {
     flexDirection: 'row',
@@ -325,7 +334,7 @@ const styles = StyleSheet.create({
   content: {
     padding: 20,
     paddingTop: 16,
-    paddingBottom: BOTTOM_SAFE_AREA,
+    paddingBottom: 16,
     gap: 14,
   },
   titleRow: {
@@ -465,8 +474,14 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#4B5563',
   },
+  directionsContainer: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(0, 0, 0, 0.1)',
+    backgroundColor: 'inherit',
+  },
   directionsButton: {
-    marginTop: 8,
     padding: 16,
     borderRadius: 14,
     flexDirection: 'row',

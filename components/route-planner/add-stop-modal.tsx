@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -36,6 +36,14 @@ export function AddStopModal({
   onClearError,
 }: AddStopModalProps) {
   const [prompt, setPrompt] = useState('');
+
+  // Reset prompt when modal opens
+  useEffect(() => {
+    if (visible) {
+      setPrompt('');
+      onClearError();
+    }
+  }, [visible, onClearError]);
 
   const handleSubmit = () => {
     if (prompt.trim() && !isLoading) {
@@ -213,7 +221,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#FEF2F2',
+    backgroundColor: tailwind.red50,
     padding: 12,
     borderRadius: 10,
     marginBottom: 16,
@@ -221,7 +229,7 @@ const styles = StyleSheet.create({
   errorText: {
     flex: 1,
     fontSize: 14,
-    color: '#DC2626',
+    color: tailwind.red600,
   },
   submitButton: {
     flexDirection: 'row',

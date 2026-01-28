@@ -55,50 +55,55 @@ export function useRouteGeneration() {
           existingStops: route.stops,
         });
 
-        // Sort existing stops by order
-        const sortedStops = [...route.stops].sort((a, b) => a.order - b.order);
+        // Use functional update to avoid stale closure issues
+        setRoute((currentRoute) => {
+          if (!currentRoute) return null;
 
-        // Find optimal insertion position
-        const optimalOrder = findOptimalInsertionPosition(
-          sortedStops.map((s) => ({ latitude: s.latitude, longitude: s.longitude })),
-          { latitude: result.stop.latitude, longitude: result.stop.longitude }
-        );
+          // Sort existing stops by order
+          const sortedStops = [...currentRoute.stops].sort((a, b) => a.order - b.order);
 
-        console.log(`📍 Optimal insertion position for "${result.stop.name}": ${optimalOrder}`);
+          // Find optimal insertion position
+          const optimalOrder = findOptimalInsertionPosition(
+            sortedStops.map((s) => ({ latitude: s.latitude, longitude: s.longitude })),
+            { latitude: result.stop.latitude, longitude: result.stop.longitude }
+          );
 
-        // Renumber all stops to accommodate the new one
-        const updatedStops: RouteStop[] = [];
+          console.log(`📍 Optimal insertion position for "${result.stop.name}": ${optimalOrder}`);
 
-        for (const stop of sortedStops) {
-          if (stop.order >= optimalOrder) {
-            // Shift stops at or after insertion point
-            updatedStops.push({ ...stop, order: stop.order + 1 });
-          } else {
-            updatedStops.push(stop);
+          // Renumber all stops to accommodate the new one
+          const updatedStops: RouteStop[] = [];
+
+          for (const stop of sortedStops) {
+            if (stop.order >= optimalOrder) {
+              // Shift stops at or after insertion point
+              updatedStops.push({ ...stop, order: stop.order + 1 });
+            } else {
+              updatedStops.push(stop);
+            }
           }
-        }
 
-        // Add the new stop with the optimal order
-        const newStop: RouteStop = {
-          ...result.stop,
-          order: optimalOrder,
-        };
-        updatedStops.push(newStop);
+          // Add the new stop with the optimal order
+          const newStop: RouteStop = {
+            ...result.stop,
+            order: optimalOrder,
+          };
+          updatedStops.push(newStop);
 
-        // Sort by order and update route
-        updatedStops.sort((a, b) => a.order - b.order);
+          // Sort by order and update route
+          updatedStops.sort((a, b) => a.order - b.order);
 
-        setRoute({
-          ...route,
-          stops: updatedStops,
+          console.log(`✅ Added "${newStop.name}" as stop #${optimalOrder}`);
+
+          return {
+            ...currentRoute,
+            stops: updatedStops,
+          };
         });
 
         // Add any warnings from validation
         if (result.warnings.length > 0) {
           setWarnings((prev) => [...prev, ...result.warnings]);
         }
-
-        console.log(`✅ Added "${newStop.name}" as stop #${optimalOrder}`);
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Failed to add stop';
         setAddStopError(errorMessage);

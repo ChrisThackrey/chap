@@ -1,11 +1,12 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { View, StyleSheet, TouchableOpacity, Platform } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Platform, ActivityIndicator } from 'react-native';
 import MapView, { Circle, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedView } from '@/components/themed-view';
 import { ThemedText } from '@/components/themed-text';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { Colors, MapColors } from '@/constants/theme';
+import { Colors, MapColors, tailwind } from '@/constants/theme';
 import {
   milesToMeters,
   getPointAtBearing,
@@ -56,9 +57,11 @@ export function RadiusSelector({
   onCancel,
 }: RadiusSelectorProps) {
   const [radiusMiles, setRadiusMiles] = useState(initialRadius);
+  const [mapReady, setMapReady] = useState(false);
   const mapRef = useRef<MapView>(null);
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
+  const insets = useSafeAreaInsets();
 
   // Calculate handle position (East of center)
   const handlePosition = useMemo(() => {
@@ -125,7 +128,7 @@ export function RadiusSelector({
   };
 
   return (
-    <ThemedView style={styles.container}>
+    <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={onCancel} style={styles.headerButton}>
@@ -145,9 +148,17 @@ export function RadiusSelector({
 
       {/* Map with circle overlay */}
       <View style={styles.mapContainer}>
+        {/* Loading indicator while map initializes */}
+        {!mapReady && (
+          <View style={styles.mapLoading}>
+            <ActivityIndicator size="large" color={colors.tint} />
+            <ThemedText style={styles.mapLoadingText}>Loading map...</ThemedText>
+          </View>
+        )}
+
         <MapView
           ref={mapRef}
-          style={styles.map}
+          style={[styles.map, !mapReady && styles.mapHidden]}
           provider={PROVIDER_GOOGLE}
           customMapStyle={PASTEL_MAP_STYLE}
           initialRegion={initialMapRegion}
@@ -157,6 +168,14 @@ export function RadiusSelector({
           zoomEnabled={true}
           rotateEnabled={false}
           pitchEnabled={false}
+          onMapReady={() => {
+            console.log('✅ RadiusSelector map ready');
+            setMapReady(true);
+          }}
+          onMapLoaded={() => {
+            console.log('✅ RadiusSelector map tiles loaded');
+            setMapReady(true);
+          }}
         >
           {/* Radius circle */}
           <Circle
@@ -230,16 +249,13 @@ export function RadiusSelector({
       </View>
 
       {/* Help text */}
-      <ThemedText style={styles.helpText}>
+      <ThemedText style={[styles.helpText, { paddingBottom: Math.max(28, insets.bottom + 8) }]}>
         Drag the handle to adjust the search radius, or tap a preset above.
         All route stops will be within this distance.
       </ThemedText>
     </ThemedView>
   );
 }
-
-// Indigo accent color for consistency with route theme
-const ACCENT_COLOR = '#6366F1';
 
 const styles = StyleSheet.create({
   container: {
@@ -252,7 +268,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(0, 0, 0, 0.1)',
+    borderBottomColor: tailwind.gray200,
   },
   headerButton: {
     minWidth: 60,
@@ -272,6 +288,21 @@ const styles = StyleSheet.create({
   map: {
     flex: 1,
   },
+  mapHidden: {
+    opacity: 0,
+  },
+  mapLoading: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: tailwind.gray100,
+    zIndex: 10,
+  },
+  mapLoadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: tailwind.gray500,
+  },
   centerMarker: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -280,12 +311,12 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: ACCENT_COLOR,
+    backgroundColor: tailwind.indigo500,
     borderWidth: 3,
     borderColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: ACCENT_COLOR,
+    shadowColor: tailwind.indigo500,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.4,
     shadowRadius: 6,
@@ -295,7 +326,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 60,
     alignSelf: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.98)',
+    backgroundColor: MapColors.label.background,
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 24,
@@ -305,12 +336,12 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
     borderWidth: 1,
-    borderColor: 'rgba(99, 102, 241, 0.15)',
+    borderColor: `${tailwind.indigo500}26`, // 15% opacity
   },
   radiusText: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#1F2937',
+    color: tailwind.gray800,
     letterSpacing: 0.3,
   },
   presetsContainer: {
@@ -333,18 +364,18 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 12,
     borderWidth: 1.5,
-    borderColor: '#E5E7EB',
+    borderColor: tailwind.gray200,
     alignItems: 'center',
-    backgroundColor: '#FAFAFA',
+    backgroundColor: tailwind.gray50,
   },
   presetButtonActive: {
-    backgroundColor: ACCENT_COLOR,
-    borderColor: ACCENT_COLOR,
+    backgroundColor: tailwind.indigo500,
+    borderColor: tailwind.indigo500,
   },
   presetButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#374151',
+    color: tailwind.gray700,
   },
   presetButtonTextActive: {
     color: '#FFFFFF',
@@ -354,7 +385,6 @@ const styles = StyleSheet.create({
     opacity: 0.55,
     textAlign: 'center',
     paddingHorizontal: 28,
-    paddingBottom: 28,
     lineHeight: 19,
   },
 });

@@ -84,8 +84,10 @@ export default function RoutePlannerScreen() {
     if (route) {
       try {
         await saveRoute(route);
+        Alert.alert('Saved', 'Route saved successfully');
       } catch (error) {
         console.error('Failed to save route:', error);
+        Alert.alert('Error', 'Failed to save route. Please try again.');
       }
     }
   };
@@ -218,7 +220,7 @@ export default function RoutePlannerScreen() {
           </ThemedText>
           <ThemedText style={styles.errorMessage}>{error}</ThemedText>
           <ThemedText style={styles.errorHint}>
-            Make sure you've added your OpenAI API key to the .env file
+            Make sure you&apos;ve added your OpenAI API key to the .env file
           </ThemedText>
           <PromptInput onGenerate={handleGenerate} loading={false} />
         </ThemedView>

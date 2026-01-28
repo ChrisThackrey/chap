@@ -5,8 +5,27 @@ import { extractParkingInfo } from './parking-detection';
 const FOURSQUARE_API_KEY = process.env.EXPO_PUBLIC_FOURSQUARE_API_KEY;
 const FOURSQUARE_API_BASE = 'https://api.foursquare.com/v3';
 
-// Track if Foursquare API has returned 410 (V3 deprecated for this account)
+// Track if Foursquare API has returned errors (401/410)
+// Reset after 5 minutes to allow retry in case API recovers
 let foursquareApiDeprecated = false;
+let foursquareApiDeprecatedAt: number | null = null;
+const API_RETRY_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
+function checkApiRecovery(): void {
+  if (foursquareApiDeprecated && foursquareApiDeprecatedAt) {
+    const elapsed = Date.now() - foursquareApiDeprecatedAt;
+    if (elapsed >= API_RETRY_COOLDOWN_MS) {
+      console.log('🔄 Foursquare API cooldown elapsed, allowing retry');
+      foursquareApiDeprecated = false;
+      foursquareApiDeprecatedAt = null;
+    }
+  }
+}
+
+function markApiDeprecated(): void {
+  markApiDeprecated();
+  foursquareApiDeprecatedAt = Date.now();
+}
 
 /**
  * Custom error class for Foursquare API errors
@@ -98,6 +117,9 @@ export async function searchNearbyVenues(
     throw new Error('Foursquare API key not configured');
   }
 
+  // Check if API has recovered from previous errors
+  checkApiRecovery();
+
   // Skip API call if we know it's deprecated
   if (foursquareApiDeprecated) {
     return [];
@@ -115,7 +137,7 @@ export async function searchNearbyVenues(
   const response = await fetch(`${FOURSQUARE_API_BASE}/places/search?${params}`, {
     method: 'GET',
     headers: {
-      'Authorization': `Bearer ${FOURSQUARE_API_KEY}`,
+      'Authorization': FOURSQUARE_API_KEY!,
       'Accept': 'application/json',
     },
   });
@@ -123,14 +145,18 @@ export async function searchNearbyVenues(
   if (!response.ok) {
     // Handle 401 Unauthorized - invalid API key
     if (response.status === 401) {
-      foursquareApiDeprecated = true;
+      markApiDeprecated();
+      const errorBody = await response.text().catch(() => 'No response body');
       console.warn('Foursquare API key invalid (401 Unauthorized). Falling back to geocoding.');
-      console.warn('Get a valid v3 API key at: https://location.foursquare.com/developer/');
+      console.warn('Error details:', errorBody);
+      console.warn('API key prefix:', FOURSQUARE_API_KEY?.substring(0, 10) + '...');
+      console.warn('Ensure your key is a V3 Places API key from: https://location.foursquare.com/developer/');
+      console.warn('The key should start with "fsq3" for V3 API keys.');
       return [];
     }
     // Handle 410 Gone - API deprecated for this account
     if (response.status === 410) {
-      foursquareApiDeprecated = true;
+      markApiDeprecated();
       console.warn('Foursquare V3 API unavailable (410 Gone). Falling back to geocoding.');
       return [];
     }
@@ -174,7 +200,7 @@ export async function getPlaceDetails(placeId: string): Promise<FoursquareVenue 
     {
       method: 'GET',
       headers: {
-        'Authorization': `Bearer ${FOURSQUARE_API_KEY}`,
+        'Authorization': FOURSQUARE_API_KEY!,
         'Accept': 'application/json',
       },
     }
@@ -183,7 +209,7 @@ export async function getPlaceDetails(placeId: string): Promise<FoursquareVenue 
   if (!response.ok) {
     if (response.status === 401 || response.status === 404 || response.status === 410) {
       if (response.status === 401 || response.status === 410) {
-        foursquareApiDeprecated = true;
+        markApiDeprecated();
       }
       return null;
     }
