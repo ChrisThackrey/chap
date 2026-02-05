@@ -595,7 +595,11 @@ export async function generateSingleVenue(
   prompt: string,
   options: SingleVenueOptions
 ): Promise<SingleVenueResult> {
+  console.log('[generateSingleVenue] Starting with prompt:', prompt);
   const { userLocation, locationContext, existingStops, maxDistanceMiles = 25 } = options;
+  console.log('[generateSingleVenue] Location context:', locationContext);
+  console.log('[generateSingleVenue] User location:', userLocation);
+  console.log('[generateSingleVenue] Existing stops:', existingStops.length);
 
   // Build list of existing stop names to avoid duplicates
   const existingNames = existingStops.map((s) => s.name).join(', ');
@@ -637,6 +641,7 @@ Return the venue with:
 
   // Determine whether to use web search
   const useWebSearch = shouldTriggerWebSearch(prompt);
+  console.log('[generateSingleVenue] Use web search:', useWebSearch);
   let venueData: any;
   let citations: VenueCitation[] = [];
   let webSearchUsed = false;
@@ -644,7 +649,7 @@ Return the venue with:
   if (useWebSearch) {
     // Try web search first, then fall back to standard generation
     try {
-      console.log('[RouteGenerator] Using GPT-4o with web search for single venue');
+      console.log('[generateSingleVenue] Using GPT-4o with web search for single venue');
       const webSearchResult = await generateSingleVenueWithWebSearch(
         systemPrompt,
         prompt,
@@ -656,43 +661,79 @@ Return the venue with:
     } catch (webSearchError) {
       // Classify and log the error
       const classified = classifyError(webSearchError);
-      console.warn('[RouteGenerator] Web search failed for single venue:', classified.userMessage);
+      console.warn('[generateSingleVenue] Web search failed:', classified.userMessage);
+      console.warn('[generateSingleVenue] Full web search error:', webSearchError);
 
       try {
         // Fallback 1: GPT-4o without web search (Chat Completions)
-        console.log('[RouteGenerator] Falling back to GPT-4o Chat Completions');
+        console.log('[generateSingleVenue] Falling back to GPT-4o Chat Completions');
         const fallbackResult = await generateSingleVenueWithChatCompletions(systemPrompt, prompt, MODEL);
         venueData = fallbackResult.venueData;
-      } catch (_gpt5Error) {
-        // Fallback 2: GPT-4o as last resort
-        console.warn('[RouteGenerator] GPT-4o failed, falling back to GPT-4o');
-        const gpt4oResult = await generateSingleVenueWithChatCompletions(systemPrompt, prompt, FALLBACK_MODEL);
-        venueData = gpt4oResult.venueData;
+        console.log('[generateSingleVenue] Fallback to GPT-4o returned venue:', venueData?.name);
+      } catch (gpt4oError) {
+        // Fallback 2: GPT-4o-mini as last resort
+        console.warn('[generateSingleVenue] GPT-4o also failed:', gpt4oError instanceof Error ? gpt4oError.message : gpt4oError);
+        console.log('[generateSingleVenue] Falling back to GPT-4o-mini');
+        const gpt4oMiniResult = await generateSingleVenueWithChatCompletions(systemPrompt, prompt, FALLBACK_MODEL);
+        venueData = gpt4oMiniResult.venueData;
+        console.log('[generateSingleVenue] GPT-4o-mini returned venue:', venueData?.name);
       }
     }
   } else {
     // Standard generation with GPT-4o (Chat Completions)
     try {
+      console.log('[generateSingleVenue] Using standard GPT-4o Chat Completions');
       const result = await generateSingleVenueWithChatCompletions(systemPrompt, prompt, MODEL);
       venueData = result.venueData;
-    } catch (_error) {
+      console.log('[generateSingleVenue] GPT-4o returned venue:', venueData?.name);
+    } catch (apiError) {
       // Fallback to GPT-4o
-      console.warn('[RouteGenerator] GPT-4o failed, falling back to GPT-4o');
+      console.warn('[generateSingleVenue] GPT-4o failed:', apiError instanceof Error ? apiError.message : apiError);
+      console.warn('[generateSingleVenue] Falling back to GPT-4o-mini');
       const fallbackResult = await generateSingleVenueWithChatCompletions(systemPrompt, prompt, FALLBACK_MODEL);
       venueData = fallbackResult.venueData;
+      console.log('[generateSingleVenue] Fallback returned venue:', venueData?.name);
     }
   }
 
   // Validate and enrich the single stop (order will be set by caller)
+  console.log('[generateSingleVenue] Validating venue data:', JSON.stringify(venueData, null, 2));
+
+  // Ensure required fields are present
+  if (!venueData || !venueData.name) {
+    console.error('[generateSingleVenue] AI returned invalid venue data - missing name');
+    throw new Error('Could not generate a valid venue. Please try a different description.');
+  }
+
+  // Provide defaults for missing fields
   const stopData = {
-    ...venueData,
+    name: venueData.name,
+    type: venueData.type || 'activity',
+    description: venueData.description || `A ${venueData.type || 'venue'} matching your request`,
+    address: venueData.address || (locationContext ? `${locationContext}` : 'Address to be determined'),
+    atmosphereKeywords: venueData.atmosphereKeywords || [],
+    duration: venueData.duration || 60,
     order: 1, // Temporary order, will be updated by caller
   };
 
-  const validationResult = await validateAndEnrichStops([stopData], userLocation, maxDistanceMiles);
+  console.log('[generateSingleVenue] Prepared stop data:', JSON.stringify(stopData, null, 2));
+  console.log('[generateSingleVenue] Calling validateAndEnrichStops...');
+
+  // Pass promptKeywords for consistent venue matching with generateRoute
+  let validationResult;
+  try {
+    validationResult = await validateAndEnrichStops([stopData], userLocation, maxDistanceMiles, promptKeywords);
+    console.log('[generateSingleVenue] Validation returned', validationResult.data.length, 'stops');
+  } catch (validationError) {
+    console.error('[generateSingleVenue] Validation threw error:', validationError);
+    const errorMsg = validationError instanceof Error ? validationError.message : 'Validation failed';
+    throw new Error(`Could not validate venue: ${errorMsg}`);
+  }
 
   if (validationResult.data.length === 0) {
-    throw new Error('Could not find a valid venue matching your description');
+    console.error('[generateSingleVenue] No valid venue found after validation');
+    const radiusMsg = maxDistanceMiles ? ` within ${maxDistanceMiles} miles` : '';
+    throw new Error(`Could not find a venue matching "${prompt}"${radiusMsg}. Try a different description or increase your search radius.`);
   }
 
   // Add web search metadata to the stop

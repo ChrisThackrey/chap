@@ -23,7 +23,7 @@ function checkApiRecovery(): void {
 }
 
 function markApiDeprecated(): void {
-  markApiDeprecated();
+  foursquareApiDeprecated = true;
   foursquareApiDeprecatedAt = Date.now();
 }
 

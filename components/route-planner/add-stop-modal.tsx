@@ -40,14 +40,27 @@ export function AddStopModal({
   // Reset prompt when modal opens
   useEffect(() => {
     if (visible) {
+      console.log('📝 AddStopModal opened');
       setPrompt('');
       onClearError();
+    } else {
+      console.log('📝 AddStopModal closed');
     }
   }, [visible, onClearError]);
 
+  // Log error changes
+  useEffect(() => {
+    if (error) {
+      console.log('❌ AddStopModal error:', error);
+    }
+  }, [error]);
+
   const handleSubmit = () => {
     if (prompt.trim() && !isLoading) {
+      console.log('📝 AddStopModal submitting prompt:', prompt.trim());
       onSubmit(prompt.trim());
+    } else {
+      console.log('📝 AddStopModal submit blocked - prompt empty or loading');
     }
   };
 

@@ -1,12 +1,21 @@
-import { RouteStop, UserLocation } from '@/types/route';
+import uuid from 'react-native-uuid';
+import { RouteStop, UserLocation, VenueDetails } from '@/types/route';
 import { ValidationWarning, RouteValidationResult } from '@/types/validation';
 import {
-  searchNearbyVenues,
-  searchVenuesByType,
-  getPlaceDetails,
-  mapVenueToDetails,
+  searchNearbyVenues as searchFoursquareVenues,
+  searchVenuesByType as searchFoursquareByType,
+  getPlaceDetails as getFoursquareDetails,
+  mapVenueToDetails as mapFoursquareToDetails,
   isFoursquareConfigured,
 } from './foursquare';
+import {
+  searchNearbyPlaces as searchGooglePlaces,
+  searchPlacesByType as searchGoogleByType,
+  getPlaceDetails as getGoogleDetails,
+  mapGooglePlaceToVenueDetails,
+  isGooglePlacesConfigured,
+  GooglePlaceNew,
+} from './google-places';
 import { geocodeAddressWithScore, reverseGeocode } from './geocoding';
 import { validateAddressQuality } from './address-validator';
 import {
@@ -16,6 +25,19 @@ import {
   createRegionMismatchError,
 } from './error-classifier';
 import { validateCoordinatesInRegion } from './geocoding-scorer';
+
+// Venue result from any provider (normalized shape for internal use)
+interface NormalizedVenue {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  address?: string;
+  rating?: number;
+  categories?: string[];
+  provider: 'google' | 'foursquare';
+  rawData: any;
+}
 
 /**
  * Validation configuration
@@ -38,8 +60,22 @@ const VALIDATION_CONFIG = {
 let currentSearchKeywords: string[] = [];
 
 /**
- * Validate and enrich route stops with real venue data from Foursquare
- * Now returns validation warnings along with stops
+ * Determine which venue provider to use based on configuration
+ * Priority: Google Places > Foursquare > Geocoding only
+ */
+function getAvailableProvider(): 'google' | 'foursquare' | 'geocoding' {
+  if (isGooglePlacesConfigured()) {
+    return 'google';
+  }
+  if (isFoursquareConfigured()) {
+    return 'foursquare';
+  }
+  return 'geocoding';
+}
+
+/**
+ * Validate and enrich route stops with real venue data
+ * Uses provider fallback chain: Google Places -> Foursquare -> Geocoding
  *
  * @param stops - Array of AI-generated stops
  * @param userLocation - Optional user location for context
@@ -65,13 +101,17 @@ export async function validateAndEnrichStops(
     : VALIDATION_CONFIG.MAX_DISTANCE_KM;
   const warnings: ValidationWarning[] = [];
 
-  // If Foursquare is not configured or unavailable (410), fall back to geocoding only
-  if (!isFoursquareConfigured()) {
-    console.warn('Foursquare API not available, using geocoding only');
+  // Determine primary provider
+  const primaryProvider = getAvailableProvider();
+  console.log(`Using ${primaryProvider} as primary venue provider`);
+
+  // If no venue API is available, fall back to geocoding only
+  if (primaryProvider === 'geocoding') {
+    console.warn('No venue API available, using geocoding only');
     warnings.push({
       severity: 'info',
-      message: 'Using geocoding for venue locations.',
-      suggestedAction: 'Configure a valid Foursquare API key for verified venue data',
+      message: 'Using geocoding for venue locations (limited details).',
+      suggestedAction: 'Configure Google Places or Foursquare API for verified venue data',
     });
     const geocodedStops = await fallbackToGeocoding(stops, userLocation);
     warnings.push(...geocodedStops.warnings);
@@ -83,7 +123,14 @@ export async function validateAndEnrichStops(
   for (let i = 0; i < stops.length; i++) {
     const stop = stops[i];
     try {
-      const result = await validateStop(stop, userLocation, i, maxRadiusMeters, maxDistanceKm);
+      const result = await validateStopWithProviderChain(
+        stop,
+        userLocation,
+        i,
+        maxRadiusMeters,
+        maxDistanceKm,
+        primaryProvider
+      );
       validatedStops.push(result.data);
       warnings.push(...result.warnings);
     } catch (error) {
@@ -119,14 +166,15 @@ export async function validateAndEnrichStops(
 }
 
 /**
- * Validate a single stop and enrich with venue data
+ * Validate a single stop using provider chain (Google -> Foursquare -> Geocoding)
  */
-async function validateStop(
+async function validateStopWithProviderChain(
   stop: Partial<RouteStop>,
   userLocation?: UserLocation,
   stopIndex?: number,
   maxRadiusMeters?: number,
-  maxDistanceKm?: number
+  maxDistanceKm?: number,
+  primaryProvider?: 'google' | 'foursquare'
 ): Promise<RouteValidationResult<RouteStop>> {
   const expandedRadius = maxRadiusMeters || VALIDATION_CONFIG.EXPANDED_RADIUS;
   const regionDistanceKm = maxDistanceKm || VALIDATION_CONFIG.MAX_REGION_DISTANCE_KM;
@@ -148,71 +196,387 @@ async function validateStop(
     });
   }
 
-  // Strategy 1: Search by name and description near the user location
-  let venues = await searchByNameAndDescription(stop, userLocation);
-
-  // Strategy 2: If no results, search by type only
-  if (venues.length === 0) {
-    console.log(`No venues found for ${stop.name}, trying type-only search`);
-    venues = await searchByTypeOnly(stop, userLocation);
+  // Try Google Places first (if available)
+  if (primaryProvider === 'google' || isGooglePlacesConfigured()) {
+    const googleResult = await tryGooglePlaces(stop, userLocation, stopIndex, expandedRadius, regionDistanceKm, warnings);
+    if (googleResult) {
+      return googleResult;
+    }
+    console.log(`Google Places returned no results for ${stop.name}, trying Foursquare`);
   }
 
-  // Strategy 3: If still no results, expand radius (use configured max)
-  if (venues.length === 0) {
-    console.log(`Still no venues found for ${stop.name}, expanding search radius`);
-    venues = await searchWithExpandedRadius(stop, userLocation, expandedRadius);
+  // Try Foursquare as fallback (if available)
+  if (isFoursquareConfigured()) {
+    const foursquareResult = await tryFoursquare(stop, userLocation, stopIndex, expandedRadius, regionDistanceKm, warnings);
+    if (foursquareResult) {
+      return foursquareResult;
+    }
+    console.log(`Foursquare returned no results for ${stop.name}, falling back to geocoding`);
   }
 
-  // Select best venue from results
-  if (venues.length > 0) {
-    const bestVenue = selectBestVenue(venues, stop);
+  // Final fallback: Use AI suggestion with geocoding
+  console.log(`No venue data found for ${stop.name}, using geocoding`);
+  return await validateStopWithGeocoding(stop, userLocation, stopIndex);
+}
 
-    // LAYER 3: Validate coordinates in expected region
-    if (userLocation) {
-      const isInRegion = validateCoordinatesInRegion(
-        bestVenue.geocodes.main.latitude,
-        bestVenue.geocodes.main.longitude,
-        { lat: userLocation.latitude, lon: userLocation.longitude },
-        regionDistanceKm
+/**
+ * Try to find venue using Google Places API
+ */
+async function tryGooglePlaces(
+  stop: Partial<RouteStop>,
+  userLocation?: UserLocation,
+  stopIndex?: number,
+  expandedRadius?: number,
+  regionDistanceKm?: number,
+  warnings?: ValidationWarning[]
+): Promise<RouteValidationResult<RouteStop> | null> {
+  try {
+    const location = await getSearchCenter(stop, userLocation);
+    const searchQuery = buildSearchQuery(stop);
+
+    // Strategy 1: Search by name and description
+    let places = await searchGooglePlaces(
+      searchQuery,
+      location.latitude,
+      location.longitude,
+      VALIDATION_CONFIG.INITIAL_RADIUS
+    );
+
+    // Strategy 2: Search by type only
+    if (places.length === 0) {
+      places = await searchGoogleByType(
+        stop.type!,
+        location.latitude,
+        location.longitude,
+        VALIDATION_CONFIG.INITIAL_RADIUS,
+        VALIDATION_CONFIG.SEARCH_LIMIT
+      );
+    }
+
+    // Strategy 3: Expand radius
+    if (places.length === 0 && expandedRadius) {
+      places = await searchGoogleByType(
+        stop.type!,
+        location.latitude,
+        location.longitude,
+        expandedRadius,
+        VALIDATION_CONFIG.SEARCH_LIMIT
+      );
+    }
+
+    if (places.length === 0) {
+      return null;
+    }
+
+    // Normalize Google results for scoring (New API format)
+    // Filter out venues with invalid/missing coordinates
+    const normalizedVenues: NormalizedVenue[] = places
+      .filter(p => p.location &&
+                   typeof p.location.latitude === 'number' &&
+                   typeof p.location.longitude === 'number' &&
+                   !isNaN(p.location.latitude) &&
+                   !isNaN(p.location.longitude))
+      .map(p => ({
+        id: p.id,
+        name: p.displayName.text,
+        latitude: p.location!.latitude,
+        longitude: p.location!.longitude,
+        address: p.formattedAddress,
+        rating: p.rating ? p.rating * 2 : undefined, // Convert 5-scale to 10-scale
+        categories: p.types,
+        provider: 'google' as const,
+        rawData: p,
+      }));
+
+    if (normalizedVenues.length === 0) {
+      console.warn(`[Google] No venues with valid coordinates found for "${stop.name}"`);
+      return null;
+    }
+
+    const bestVenue = selectBestNormalizedVenue(normalizedVenues, stop);
+
+    // Validate distance from user location (enforce radius limit)
+    if (userLocation && regionDistanceKm) {
+      const distanceKm = calculateDistanceKm(
+        userLocation.latitude,
+        userLocation.longitude,
+        bestVenue.latitude,
+        bestVenue.longitude
       );
 
-      if (!isInRegion) {
-        const regionError = createRegionMismatchError(stop.name!, 'user location');
+      console.log(`📏 [Google] Venue "${bestVenue.name}" is ${distanceKm.toFixed(2)} km away (limit: ${regionDistanceKm.toFixed(2)} km)`);
+
+      // Hard reject if venue exceeds the radius limit
+      if (distanceKm > regionDistanceKm) {
+        console.warn(`❌ [Google] Venue "${bestVenue.name}" exceeds radius limit (${distanceKm.toFixed(1)}km > ${regionDistanceKm.toFixed(1)}km), rejecting`);
+        return null; // This will cause fallback to next provider or geocoding
+      }
+
+      // Warn if venue is at edge of radius (>80% of limit)
+      if (warnings && distanceKm > regionDistanceKm * 0.8) {
+        const distanceMiles = distanceKm * 0.621371;
+        const limitMiles = regionDistanceKm * 0.621371;
         warnings.push({
-          severity: 'warning',
+          severity: 'info',
           stopIndex,
           stopName: stop.name,
-          message: regionError.userMessage,
-          suggestedAction: regionError.suggestedAction,
+          message: `"${bestVenue.name}" is ${distanceMiles.toFixed(1)} miles from center (near edge of ${limitMiles.toFixed(0)} mile radius)`,
         });
       }
     }
 
-    // Fetch detailed information
-    const venueDetails = await getPlaceDetails(bestVenue.fsq_id);
+    // Get detailed information from Google
+    const placeDetails = await getGoogleDetails(bestVenue.id);
+    const place = placeDetails || (bestVenue.rawData as GooglePlaceNew);
 
-    if (venueDetails) {
-      const enrichedStop: RouteStop = {
-        name: venueDetails.name,
-        type: stop.type,
-        description: stop.description || '',
-        address: venueDetails.location.formatted_address || stop.address,
-        latitude: venueDetails.geocodes.main.latitude,
-        longitude: venueDetails.geocodes.main.longitude,
-        duration: stop.duration || 60,
-        order: stop.order || 1,
-        venueDetails: mapVenueToDetails(venueDetails),
-        validationStatus: 'verified',
-      };
+    const enrichedStop: RouteStop = {
+      id: uuid.v4() as string,
+      name: place.displayName.text,
+      type: stop.type!,
+      description: stop.description || '',
+      address: place.formattedAddress || stop.address!,
+      latitude: place.location?.latitude ?? bestVenue.latitude,
+      longitude: place.location?.longitude ?? bestVenue.longitude,
+      duration: stop.duration || 60,
+      order: stop.order || 1,
+      venueDetails: mapGooglePlaceToVenueDetails(place),
+      validationStatus: 'verified',
+    };
 
-      console.log(`✓ Validated venue: ${enrichedStop.name} (rating: ${enrichedStop.venueDetails?.rating})`);
-      return { data: enrichedStop, warnings };
+    console.log(`[Google] Validated venue: ${enrichedStop.name} (rating: ${enrichedStop.venueDetails?.rating})`);
+    return { data: enrichedStop, warnings: warnings || [] };
+  } catch (error) {
+    console.warn(`Google Places error for ${stop.name}:`, error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
+/**
+ * Try to find venue using Foursquare API
+ */
+async function tryFoursquare(
+  stop: Partial<RouteStop>,
+  userLocation?: UserLocation,
+  stopIndex?: number,
+  expandedRadius?: number,
+  regionDistanceKm?: number,
+  warnings?: ValidationWarning[]
+): Promise<RouteValidationResult<RouteStop> | null> {
+  try {
+    const location = await getSearchCenter(stop, userLocation);
+    const searchQuery = buildSearchQuery(stop);
+
+    // Strategy 1: Search by name and description
+    let venues = await searchFoursquareVenues(
+      searchQuery,
+      location.latitude,
+      location.longitude,
+      VALIDATION_CONFIG.INITIAL_RADIUS,
+      VALIDATION_CONFIG.SEARCH_LIMIT
+    );
+
+    // Strategy 2: Search by type only
+    if (venues.length === 0) {
+      venues = await searchFoursquareByType(
+        stop.type!,
+        location.latitude,
+        location.longitude,
+        VALIDATION_CONFIG.INITIAL_RADIUS,
+        VALIDATION_CONFIG.SEARCH_LIMIT
+      );
+    }
+
+    // Strategy 3: Expand radius
+    if (venues.length === 0 && expandedRadius) {
+      venues = await searchFoursquareByType(
+        stop.type!,
+        location.latitude,
+        location.longitude,
+        expandedRadius,
+        VALIDATION_CONFIG.SEARCH_LIMIT
+      );
+    }
+
+    if (venues.length === 0) {
+      return null;
+    }
+
+    // Normalize Foursquare results for scoring
+    // Filter out venues with invalid/missing coordinates
+    const normalizedVenues: NormalizedVenue[] = venues
+      .filter((v: any) => v.geocodes?.main &&
+                          typeof v.geocodes.main.latitude === 'number' &&
+                          typeof v.geocodes.main.longitude === 'number' &&
+                          !isNaN(v.geocodes.main.latitude) &&
+                          !isNaN(v.geocodes.main.longitude))
+      .map((v: any) => ({
+        id: v.fsq_id,
+        name: v.name,
+        latitude: v.geocodes.main.latitude,
+        longitude: v.geocodes.main.longitude,
+        address: v.location?.formatted_address,
+        rating: v.rating,
+        categories: v.categories?.map((c: any) => c.name),
+        provider: 'foursquare' as const,
+        rawData: v,
+      }));
+
+    if (normalizedVenues.length === 0) {
+      console.warn(`[Foursquare] No venues with valid coordinates found for "${stop.name}"`);
+      return null;
+    }
+
+    const bestVenue = selectBestNormalizedVenue(normalizedVenues, stop);
+
+    // Validate distance from user location (enforce radius limit)
+    if (userLocation && regionDistanceKm) {
+      const distanceKm = calculateDistanceKm(
+        userLocation.latitude,
+        userLocation.longitude,
+        bestVenue.latitude,
+        bestVenue.longitude
+      );
+
+      console.log(`📏 [Foursquare] Venue "${bestVenue.name}" is ${distanceKm.toFixed(2)} km away (limit: ${regionDistanceKm.toFixed(2)} km)`);
+
+      // Hard reject if venue exceeds the radius limit
+      if (distanceKm > regionDistanceKm) {
+        console.warn(`❌ [Foursquare] Venue "${bestVenue.name}" exceeds radius limit (${distanceKm.toFixed(1)}km > ${regionDistanceKm.toFixed(1)}km), rejecting`);
+        return null; // This will cause fallback to next provider or geocoding
+      }
+
+      // Warn if venue is at edge of radius (>80% of limit)
+      if (warnings && distanceKm > regionDistanceKm * 0.8) {
+        const distanceMiles = distanceKm * 0.621371;
+        const limitMiles = regionDistanceKm * 0.621371;
+        warnings.push({
+          severity: 'info',
+          stopIndex,
+          stopName: stop.name,
+          message: `"${bestVenue.name}" is ${distanceMiles.toFixed(1)} miles from center (near edge of ${limitMiles.toFixed(0)} mile radius)`,
+        });
+      }
+    }
+
+    // Get detailed information from Foursquare
+    const venueDetails = await getFoursquareDetails(bestVenue.id);
+    const venue = venueDetails || bestVenue.rawData;
+
+    const mappedDetails = mapFoursquareToDetails(venue);
+    // Add provider info
+    mappedDetails.provider = 'foursquare';
+
+    const enrichedStop: RouteStop = {
+      id: uuid.v4() as string,
+      name: venue.name,
+      type: stop.type!,
+      description: stop.description || '',
+      address: venue.location?.formatted_address || stop.address!,
+      latitude: venue.geocodes.main.latitude,
+      longitude: venue.geocodes.main.longitude,
+      duration: stop.duration || 60,
+      order: stop.order || 1,
+      venueDetails: mappedDetails,
+      validationStatus: 'verified',
+    };
+
+    console.log(`[Foursquare] Validated venue: ${enrichedStop.name} (rating: ${enrichedStop.venueDetails?.rating})`);
+    return { data: enrichedStop, warnings: warnings || [] };
+  } catch (error) {
+    console.warn(`Foursquare error for ${stop.name}:`, error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
+/**
+ * Select best venue from normalized results with controlled randomness
+ */
+function selectBestNormalizedVenue(venues: NormalizedVenue[], stop: Partial<RouteStop>): NormalizedVenue {
+  // Score each venue
+  const scoredVenues = venues.map(venue => ({
+    venue,
+    score: calculateNormalizedVenueScore(venue, stop),
+    randomizedScore: calculateNormalizedVenueScore(venue, stop) + (Math.random() * 20 * VALIDATION_CONFIG.RANDOMNESS_FACTOR),
+  }));
+
+  // Filter out venues that are too far or very low rated
+  const suitableVenues = scoredVenues.filter(({ venue, score }) => {
+    const hasAcceptableRating = !venue.rating || venue.rating >= VALIDATION_CONFIG.MIN_RATING;
+    return score > 0 && hasAcceptableRating;
+  });
+
+  if (suitableVenues.length === 0) {
+    scoredVenues.sort((a, b) => b.score - a.score);
+    return scoredVenues[0].venue;
+  }
+
+  // Sort by randomized score for selection diversity
+  suitableVenues.sort((a, b) => b.randomizedScore - a.randomizedScore);
+
+  // Select from top candidates with weighted random selection
+  const topCandidates = suitableVenues.slice(0, Math.min(3, suitableVenues.length));
+  const weights = [0.6, 0.3, 0.1];
+  const random = Math.random();
+  let cumulative = 0;
+
+  for (let i = 0; i < topCandidates.length; i++) {
+    cumulative += weights[i];
+    if (random < cumulative) {
+      return topCandidates[i].venue;
     }
   }
 
-  // Fallback: Use AI suggestion with geocoding
-  console.log(`No suitable venue found for ${stop.name}, using AI suggestion`);
-  return await validateStopWithGeocoding(stop, userLocation, stopIndex);
+  return topCandidates[0].venue;
+}
+
+/**
+ * Calculate venue suitability score for normalized venues
+ */
+function calculateNormalizedVenueScore(venue: NormalizedVenue, stop: Partial<RouteStop>): number {
+  let score = 0;
+
+  // Name similarity (0-30 points)
+  if (stop.name && venue.name) {
+    const similarity = calculateNameSimilarity(stop.name, venue.name);
+    score += similarity * 30;
+  }
+
+  // Description/atmosphere keyword match (0-20 points)
+  if (stop.description && venue.name) {
+    const descKeywords = extractKeywordsFromText(stop.description);
+    const venueText = `${venue.name} ${venue.categories?.join(' ') || ''}`.toLowerCase();
+    const matchCount = descKeywords.filter(kw => venueText.includes(kw)).length;
+    score += Math.min(matchCount * 5, 20);
+  }
+
+  // Global search keywords match (0-15 points)
+  if (currentSearchKeywords.length > 0 && venue.name) {
+    const venueText = `${venue.name} ${venue.categories?.join(' ') || ''}`.toLowerCase();
+    const matchCount = currentSearchKeywords.filter(kw => venueText.includes(kw)).length;
+    score += Math.min(matchCount * 5, 15);
+  }
+
+  // Category matching (0-15 points)
+  if (venue.categories && stop.type) {
+    const categoryMatch = venue.categories.some(cat =>
+      cat.toLowerCase().includes(stop.type!.toLowerCase())
+    );
+    if (categoryMatch) {
+      score += 15;
+    }
+  }
+
+  // Rating score (0-15 points)
+  if (venue.rating) {
+    score += venue.rating * 1.5;
+  }
+
+  // Hidden gem bonus (up to 5 points)
+  if (venue.rating && venue.rating >= 6 && venue.rating <= 8.5) {
+    score += 5;
+  }
+
+  return score;
 }
 
 /**
@@ -236,66 +600,6 @@ async function getSearchCenter(
     // Default to center of US if no user location
     return { latitude: 39.8283, longitude: -98.5795 };
   }
-}
-
-/**
- * Search venues by name and description
- */
-async function searchByNameAndDescription(
-  stop: Partial<RouteStop>,
-  userLocation?: UserLocation
-): Promise<any[]> {
-  // Get search center location
-  const location = await getSearchCenter(stop, userLocation);
-
-  // Build search query from name and description
-  const searchQuery = buildSearchQuery(stop);
-
-  // Search nearby venues
-  return await searchNearbyVenues(
-    searchQuery,
-    location.latitude,
-    location.longitude,
-    VALIDATION_CONFIG.INITIAL_RADIUS,
-    VALIDATION_CONFIG.SEARCH_LIMIT
-  );
-}
-
-/**
- * Search venues by type only (more general search)
- */
-async function searchByTypeOnly(
-  stop: Partial<RouteStop>,
-  userLocation?: UserLocation
-): Promise<any[]> {
-  const location = await getSearchCenter(stop, userLocation);
-
-  return await searchVenuesByType(
-    stop.type!,
-    location.latitude,
-    location.longitude,
-    VALIDATION_CONFIG.INITIAL_RADIUS,
-    VALIDATION_CONFIG.SEARCH_LIMIT
-  );
-}
-
-/**
- * Search with expanded radius as last resort
- */
-async function searchWithExpandedRadius(
-  stop: Partial<RouteStop>,
-  userLocation?: UserLocation,
-  radiusMeters?: number
-): Promise<any[]> {
-  const location = await getSearchCenter(stop, userLocation);
-
-  return await searchVenuesByType(
-    stop.type!,
-    location.latitude,
-    location.longitude,
-    radiusMeters || VALIDATION_CONFIG.EXPANDED_RADIUS,
-    VALIDATION_CONFIG.SEARCH_LIMIT
-  );
 }
 
 /**
@@ -361,126 +665,6 @@ function extractKeywords(description: string): string[] {
 }
 
 /**
- * Select the best venue from search results with controlled randomness
- */
-function selectBestVenue(venues: any[], stop: Partial<RouteStop>): any {
-  // Score each venue
-  const scoredVenues = venues.map(venue => ({
-    venue,
-    score: calculateVenueScore(venue, stop),
-    // Add controlled randomness to score
-    randomizedScore: calculateVenueScore(venue, stop) + (Math.random() * 20 * VALIDATION_CONFIG.RANDOMNESS_FACTOR),
-  }));
-
-  // Filter out venues that are too far or very low rated
-  const suitableVenues = scoredVenues.filter(({ venue, score }) => {
-    const hasAcceptableRating = !venue.rating || venue.rating >= VALIDATION_CONFIG.MIN_RATING;
-    return score > 0 && hasAcceptableRating;
-  });
-
-  if (suitableVenues.length === 0) {
-    // Fall back to best scored venue if none are "suitable"
-    scoredVenues.sort((a, b) => b.score - a.score);
-    return scoredVenues[0].venue;
-  }
-
-  // Sort by randomized score for selection diversity
-  suitableVenues.sort((a, b) => b.randomizedScore - a.randomizedScore);
-
-  // Select from top candidates with weighted random selection
-  // This allows occasionally picking the 2nd or 3rd best match
-  const topCandidates = suitableVenues.slice(0, Math.min(3, suitableVenues.length));
-  const weights = [0.6, 0.3, 0.1]; // 60% chance of first, 30% second, 10% third
-  const random = Math.random();
-  let cumulative = 0;
-
-  for (let i = 0; i < topCandidates.length; i++) {
-    cumulative += weights[i];
-    if (random < cumulative) {
-      console.log(`🎲 Selected venue ${i + 1} of ${topCandidates.length} (score: ${topCandidates[i].score.toFixed(1)})`);
-      return topCandidates[i].venue;
-    }
-  }
-
-  return topCandidates[0].venue;
-}
-
-/**
- * Calculate venue suitability score - prioritizes keyword matching over popularity
- */
-function calculateVenueScore(venue: any, stop: Partial<RouteStop>): number {
-  let score = 0;
-
-  // ============================================
-  // KEYWORD MATCHING (most important - up to 50 points)
-  // ============================================
-
-  // Name similarity score (0-30 points) - INCREASED from 20
-  if (stop.name && venue.name) {
-    const similarity = calculateNameSimilarity(stop.name, venue.name);
-    score += similarity * 30;
-  }
-
-  // Description/atmosphere keyword match (0-20 points) - NEW
-  if (stop.description && venue.name) {
-    const descKeywords = extractKeywordsFromText(stop.description);
-    const venueText = `${venue.name} ${venue.categories?.map((c: any) => c.name).join(' ') || ''}`.toLowerCase();
-    const matchCount = descKeywords.filter(kw => venueText.includes(kw)).length;
-    score += Math.min(matchCount * 5, 20);
-  }
-
-  // Global search keywords match (0-15 points) - NEW
-  if (currentSearchKeywords.length > 0 && venue.name) {
-    const venueText = `${venue.name} ${venue.categories?.map((c: any) => c.name).join(' ') || ''}`.toLowerCase();
-    const matchCount = currentSearchKeywords.filter(kw => venueText.includes(kw)).length;
-    score += Math.min(matchCount * 5, 15);
-  }
-
-  // ============================================
-  // CATEGORY MATCHING (0-15 points)
-  // ============================================
-  if (venue.categories && stop.type) {
-    const categoryMatch = venue.categories.some((cat: any) =>
-      cat.name.toLowerCase().includes(stop.type!.toLowerCase())
-    );
-    if (categoryMatch) {
-      score += 15;
-    }
-  }
-
-  // ============================================
-  // QUALITY INDICATORS (reduced importance - up to 25 points)
-  // ============================================
-
-  // Rating score (0-15 points, based on 10-point scale) - REDUCED from 40
-  if (venue.rating) {
-    score += venue.rating * 1.5;
-  }
-
-  // Has photos bonus (5 points) - REDUCED from 10
-  if (venue.photos && venue.photos.length > 0) {
-    score += 5;
-  }
-
-  // Verified bonus (5 points) - REDUCED from 10
-  if (venue.verified) {
-    score += 5;
-  }
-
-  // ============================================
-  // BONUS: Hidden gem indicator (up to 10 points)
-  // ============================================
-  // Venues with moderate (not extremely high) ratings but good category match
-  // might be hidden gems worth discovering
-  if (venue.rating && venue.rating >= 6 && venue.rating <= 8.5) {
-    // Moderate rating venues get a small bonus (might be hidden gems)
-    score += 5;
-  }
-
-  return score;
-}
-
-/**
  * Extract keywords from text for matching
  */
 function extractKeywordsFromText(text: string): string[] {
@@ -491,6 +675,34 @@ function extractKeywordsFromText(text: string): string[] {
   const stopWords = new Set(['the', 'and', 'for', 'with', 'this', 'that', 'from', 'have', 'been', 'will', 'would', 'could', 'should', 'their', 'there', 'where', 'when', 'what', 'which', 'about', 'into', 'more', 'some', 'than', 'them', 'then', 'these', 'they', 'very', 'just', 'also', 'only', 'your', 'like', 'make', 'made']);
 
   return words.filter(word => word.length > 3 && !stopWords.has(word));
+}
+
+/**
+ * Calculate distance between two coordinates in kilometers using Haversine formula
+ */
+function calculateDistanceKm(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const R = 6371; // Radius of Earth in kilometers
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRadians(lat1)) *
+      Math.cos(toRadians(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function toRadians(degrees: number): number {
+  return degrees * (Math.PI / 180);
 }
 
 /**
@@ -537,27 +749,28 @@ async function validateStopWithGeocoding(
   userLocation?: UserLocation,
   stopIndex?: number
 ): Promise<RouteValidationResult<RouteStop>> {
-  if (!stop.name || !stop.type || !stop.address) {
-    throw new Error('Invalid stop: missing required fields');
-  }
+  // Provide defaults for missing fields instead of throwing
+  const name = stop.name || 'Unknown Venue';
+  const type = stop.type || 'activity';
+  const address = stop.address || (userLocation ? 'Near your location' : 'Address unknown');
 
   const warnings: ValidationWarning[] = [];
   let location: { latitude: number; longitude: number };
-  let resolvedAddress: string = stop.address;
+  let resolvedAddress: string = address;
   let validationStatus: 'geocoded' | 'approximated' | 'fallback' = 'fallback';
 
   try {
     // LAYER 2: Try to geocode with scoring
-    const geocodingResult = await geocodeAddressWithScore(stop.address);
+    const geocodingResult = await geocodeAddressWithScore(address);
     location = { latitude: geocodingResult.lat, longitude: geocodingResult.lon };
 
     // LAYER 3: Check confidence and region
     if (geocodingResult.confidence < VALIDATION_CONFIG.MIN_CONFIDENCE) {
-      const confidenceError = createLowConfidenceError(geocodingResult.confidence, stop.name);
+      const confidenceError = createLowConfidenceError(geocodingResult.confidence, name);
       warnings.push({
         severity: 'warning',
         stopIndex,
-        stopName: stop.name,
+        stopName: name,
         message: confidenceError.userMessage,
         suggestedAction: confidenceError.suggestedAction,
       });
@@ -584,11 +797,11 @@ async function validateStopWithGeocoding(
       );
 
       if (!isInRegion) {
-        const regionError = createRegionMismatchError(stop.name!, 'user location');
+        const regionError = createRegionMismatchError(name, 'user location');
         warnings.push({
           severity: 'warning',
           stopIndex,
-          stopName: stop.name,
+          stopName: name,
           message: regionError.userMessage,
           suggestedAction: regionError.suggestedAction,
         });
@@ -602,22 +815,22 @@ async function validateStopWithGeocoding(
 
       const streetAddress = await reverseGeocode(location.latitude, location.longitude);
       if (streetAddress) {
-        console.log(`Reverse geocoded address for "${stop.name}": ${streetAddress}`);
+        console.log(`Reverse geocoded address for "${name}": ${streetAddress}`);
         resolvedAddress = streetAddress;
       }
     } catch (reverseError) {
-      console.warn(`Reverse geocoding failed for ${stop.name}, keeping original address`);
+      console.warn(`Reverse geocoding failed for ${name}, keeping original address`);
       // Keep original address if reverse geocoding fails
     }
   } catch (error) {
-    console.warn(`Geocoding failed for ${stop.address}, using fallback location`);
+    console.warn(`Geocoding failed for ${address}, using fallback location`);
     const classifiedError = classifyError(error);
 
     warnings.push({
       severity: 'error',
       stopIndex,
-      stopName: stop.name,
-      message: `Could not locate "${stop.name}". Using fallback location.`,
+      stopName: name,
+      message: `Could not locate "${name}". Using fallback location.`,
       suggestedAction: classifiedError.suggestedAction || 'Try a more specific address',
     });
 
@@ -636,24 +849,29 @@ async function validateStopWithGeocoding(
       await new Promise((resolve) => setTimeout(resolve, 1000));
       const streetAddress = await reverseGeocode(location.latitude, location.longitude);
       if (streetAddress) {
-        console.log(`Reverse geocoded fallback address for "${stop.name}": ${streetAddress}`);
+        console.log(`Reverse geocoded fallback address for "${name}": ${streetAddress}`);
         resolvedAddress = streetAddress;
       }
     } catch (reverseError) {
-      console.warn(`Reverse geocoding also failed for ${stop.name}, keeping original address`);
+      console.warn(`Reverse geocoding also failed for ${name}, keeping original address`);
     }
   }
 
   return {
     data: {
-      name: stop.name,
-      type: stop.type,
+      id: uuid.v4() as string,
+      name: name,
+      type: type,
       description: stop.description || '',
       address: resolvedAddress,
       latitude: location.latitude,
       longitude: location.longitude,
       duration: stop.duration || 60,
       order: stop.order || 1,
+      venueDetails: {
+        placeId: `geocoded-${name.replace(/\s+/g, '-').toLowerCase()}`,
+        provider: 'geocoding',
+      },
       validationStatus,
       validationWarnings: warnings.length > 0 ? warnings.map(w => w.message) : undefined,
     },

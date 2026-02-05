@@ -1,4 +1,4 @@
-import { Modal, View, TouchableOpacity, StyleSheet, Linking, Platform, ScrollView, Dimensions } from 'react-native';
+import { Modal, View, TouchableOpacity, StyleSheet, Linking, Platform, ScrollView, Dimensions, ActivityIndicator, Alert } from 'react-native';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
@@ -8,7 +8,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors, MapColors } from '@/constants/theme';
 import { RouteStop } from '@/types/route';
 import { getStopIcon } from '@/constants/stop-icons';
-import { buildPhotoUrl } from '@/lib/foursquare';
+import { buildDisplayPhotoUrl } from '@/lib/google-places';
 import { VenueHours } from './venue-hours';
 import { VenueTips } from './venue-tips';
 
@@ -36,18 +36,27 @@ interface StopDetailModalProps {
   totalStops: number;
   visible: boolean;
   onClose: () => void;
+  onRemoveStop?: (stopId: string) => Promise<void>;
+  isRemovingStop?: boolean;
 }
 
-export function StopDetailModal({ stop, totalStops, visible, onClose }: StopDetailModalProps) {
+export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveStop, isRemovingStop = false }: StopDetailModalProps) {
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const insets = useSafeAreaInsets();
 
-  // Calculate safe bottom padding (minimum 20px, or device safe area + extra padding)
-  const bottomPadding = Math.max(20, insets.bottom + 8);
+  // Safe area padding inside the modal (for home indicator)
+  const bottomPadding = Math.max(20, insets.bottom);
 
-  // Calculate max modal height (70% of screen, leaving room for status bar area)
-  const maxModalHeight = SCREEN_HEIGHT * 0.7;
+  // Calculate max modal height (90% of screen - extends higher for better visibility)
+  const maxModalHeight = SCREEN_HEIGHT * 0.90;
+
+  // Debug logging
+  console.log('🔍 [StopDetailModal] Rendering modal');
+  console.log('   Stop:', stop?.name);
+  console.log('   Total stops:', totalStops);
+  console.log('   Remove button enabled:', !!onRemoveStop && totalStops > 2);
+  console.log('   Is removing:', isRemovingStop);
 
   if (!stop) return null;
 
@@ -69,39 +78,107 @@ export function StopDetailModal({ stop, totalStops, visible, onClose }: StopDeta
     });
   };
 
+  const handleRemoveStop = async () => {
+    console.log('🗑️ [StopDetailModal] Remove button tapped');
+    console.log('   Stop:', stop?.name);
+    console.log('   Total stops:', totalStops);
+    console.log('   Can remove:', totalStops > 2);
+
+    if (!onRemoveStop || !stop) {
+      console.log('❌ [StopDetailModal] No onRemoveStop handler or no stop');
+      return;
+    }
+
+    // Prevent removing if it would leave less than 2 stops
+    if (totalStops <= 2) {
+      console.log('❌ [StopDetailModal] Cannot remove - minimum stops required');
+      Alert.alert(
+        'Cannot Remove Stop',
+        'A route must have at least 2 stops. Add more stops before removing this one.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    // Confirm deletion
+    Alert.alert(
+      'Remove Stop?',
+      `Are you sure you want to remove "${stop.name}" from your route?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await onRemoveStop(stop.id);
+              onClose();
+            } catch (error) {
+              console.error('Error removing stop:', error);
+              Alert.alert(
+                'Error',
+                'Failed to remove stop. Please try again.',
+                [{ text: 'OK' }]
+              );
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <Modal
       visible={visible}
       transparent
-      animationType="fade"
+      animationType="slide"
       onRequestClose={onClose}
     >
-      <TouchableOpacity
-        style={styles.overlay}
-        activeOpacity={1}
-        onPress={onClose}
-      >
+      <View style={styles.overlay}>
         <TouchableOpacity
+          style={styles.dismissArea}
           activeOpacity={1}
-          onPress={(e) => e.stopPropagation()}
-          style={[styles.modalContainer, { maxHeight: maxModalHeight }]}
-        >
+          onPress={onClose}
+        />
+        <View style={[styles.modalContainer, { maxHeight: maxModalHeight, paddingBottom: bottomPadding }]}>
           <ThemedView style={[styles.modal, { backgroundColor: colors.background }]}>
             {/* Hero Image */}
             {heroPhoto && (
               <View style={styles.heroImageContainer}>
                 <Image
-                  source={{ uri: buildPhotoUrl(heroPhoto, `${Math.round(SCREEN_WIDTH)}x${HERO_IMAGE_HEIGHT * 2}`) }}
+                  source={{ uri: buildDisplayPhotoUrl(heroPhoto, `${Math.round(SCREEN_WIDTH)}x${HERO_IMAGE_HEIGHT * 2}`) }}
                   style={styles.heroImage}
                   contentFit="cover"
                   transition={200}
                 />
                 <View style={styles.heroOverlay} />
-                <TouchableOpacity style={styles.closeButtonHero} onPress={onClose}>
-                  <View style={styles.closeButtonCircle}>
-                    <ThemedText style={styles.closeButtonText}>✕</ThemedText>
-                  </View>
-                </TouchableOpacity>
+
+                {/* Header buttons overlay */}
+                <View style={styles.heroButtonsContainer}>
+                  {/* Remove button - Left side */}
+                  {onRemoveStop && totalStops > 2 && (
+                    <TouchableOpacity
+                      style={styles.removeButtonHero}
+                      onPress={handleRemoveStop}
+                      disabled={isRemovingStop}
+                    >
+                      <View style={[styles.heroButtonCircle, styles.removeButtonCircleHero]}>
+                        {isRemovingStop ? (
+                          <ActivityIndicator size="small" color="#DC2626" />
+                        ) : (
+                          <IconSymbol name="trash" size={18} color="#DC2626" />
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  )}
+
+                  {/* Close button - Right side */}
+                  <TouchableOpacity style={styles.closeButtonHero} onPress={onClose}>
+                    <View style={styles.closeButtonCircle}>
+                      <ThemedText style={styles.closeButtonText}>✕</ThemedText>
+                    </View>
+                  </TouchableOpacity>
+                </View>
               </View>
             )}
 
@@ -115,9 +192,26 @@ export function StopDetailModal({ stop, totalStops, visible, onClose }: StopDeta
                     color="#FFFFFF"
                   />
                 </View>
-                <TouchableOpacity style={styles.closeButton} onPress={onClose}>
-                  <ThemedText style={styles.closeButtonText}>✕</ThemedText>
-                </TouchableOpacity>
+                <View style={styles.headerButtons}>
+                  {/* Remove button */}
+                  {onRemoveStop && totalStops > 2 && (
+                    <TouchableOpacity
+                      style={styles.removeButtonHeader}
+                      onPress={handleRemoveStop}
+                      disabled={isRemovingStop}
+                    >
+                      {isRemovingStop ? (
+                        <ActivityIndicator size="small" color="#DC2626" />
+                      ) : (
+                        <IconSymbol name="trash" size={20} color="#DC2626" />
+                      )}
+                    </TouchableOpacity>
+                  )}
+                  {/* Close button */}
+                  <TouchableOpacity style={styles.closeButton} onPress={onClose}>
+                    <ThemedText style={styles.closeButtonText}>✕</ThemedText>
+                  </TouchableOpacity>
+                </View>
               </View>
             )}
 
@@ -180,6 +274,16 @@ export function StopDetailModal({ stop, totalStops, visible, onClose }: StopDeta
                   <ThemedText style={styles.duration}>{stop.duration} minutes</ThemedText>
                 </View>
 
+                {/* Limited Data Indicator */}
+                {stop.venueDetails?.provider === 'geocoding' && (
+                  <View style={styles.limitedDataBadge}>
+                    <IconSymbol name="info.circle" size={14} color="#D97706" />
+                    <ThemedText style={styles.limitedDataText}>
+                      Limited venue details available
+                    </ThemedText>
+                  </View>
+                )}
+
                 {/* Description */}
                 <ThemedText style={styles.description}>
                   {stop.description}
@@ -196,7 +300,7 @@ export function StopDetailModal({ stop, totalStops, visible, onClose }: StopDeta
                     {additionalPhotos.map((photo, index) => (
                       <Image
                         key={index}
-                        source={{ uri: buildPhotoUrl(photo, '200x150') }}
+                        source={{ uri: buildDisplayPhotoUrl(photo, '200x150') }}
                         style={styles.thumbnailPhoto}
                         contentFit="cover"
                         transition={200}
@@ -232,8 +336,32 @@ export function StopDetailModal({ stop, totalStops, visible, onClose }: StopDeta
               </View>
             </ScrollView>
 
-            {/* Directions Button - Fixed at bottom, outside ScrollView */}
-            <View style={[styles.directionsContainer, { paddingBottom: bottomPadding }]}>
+            {/* Action Buttons - Fixed at bottom, outside ScrollView */}
+            <View style={styles.directionsContainer}>
+              {/* Remove Stop Button - Always visible */}
+              <TouchableOpacity
+                style={[
+                  styles.removeButton,
+                  (isRemovingStop || totalStops <= 2) && styles.removeButtonDisabled
+                ]}
+                onPress={handleRemoveStop}
+                activeOpacity={0.7}
+                disabled={isRemovingStop || !onRemoveStop || totalStops <= 2}
+              >
+                {isRemovingStop ? (
+                  <ActivityIndicator size="small" color="#DC2626" />
+                ) : (
+                  <>
+                    <IconSymbol name="trash" size={20} color={totalStops <= 2 ? '#9CA3AF' : '#DC2626'} />
+                    <ThemedText style={[
+                      styles.removeButtonText,
+                      totalStops <= 2 && styles.removeButtonTextDisabled
+                    ]}>
+                      {totalStops <= 2 ? 'Minimum 2 Stops Required' : 'Remove Stop'}
+                    </ThemedText>
+                  </>
+                )}
+              </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.directionsButton, { backgroundColor: MapColors.route.driving.main }]}
                 onPress={handleGetDirections}
@@ -245,8 +373,8 @@ export function StopDetailModal({ stop, totalStops, visible, onClose }: StopDeta
               </TouchableOpacity>
             </View>
           </ThemedView>
-        </TouchableOpacity>
-      </TouchableOpacity>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -257,17 +385,25 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'flex-end',
   },
+  dismissArea: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
   modalContainer: {
-    // maxHeight is set dynamically via inline style
+    // maxHeight and paddingBottom set dynamically via inline style
+    width: '100%',
   },
   modal: {
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.15,
     shadowRadius: 16,
-    elevation: 12,
+    elevation: 16,
     overflow: 'hidden',
   },
   heroImageContainer: {
@@ -283,10 +419,20 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0, 0, 0, 0.1)',
   },
-  closeButtonHero: {
+  heroButtonsContainer: {
     position: 'absolute',
     top: 12,
+    left: 12,
     right: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  removeButtonHero: {
+    // Position handled by parent container
+  },
+  closeButtonHero: {
+    // Position handled by parent container
   },
   closeButtonCircle: {
     width: 32,
@@ -295,6 +441,18 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.9)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  heroButtonCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  removeButtonCircleHero: {
+    backgroundColor: 'rgba(254, 242, 242, 0.95)', // Light red background
+    borderWidth: 1.5,
+    borderColor: '#DC2626',
   },
   scrollView: {
     flexShrink: 1,
@@ -305,6 +463,21 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     padding: 20,
     paddingBottom: 0,
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  removeButtonHeader: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1.5,
+    borderColor: '#DC2626',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   iconBadge: {
     width: 64,
@@ -427,6 +600,21 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#374151',
   },
+  limitedDataBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  limitedDataText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#92400E',
+  },
   description: {
     fontSize: 15,
     lineHeight: 23,
@@ -476,10 +664,40 @@ const styles = StyleSheet.create({
   },
   directionsContainer: {
     paddingHorizontal: 20,
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(0, 0, 0, 0.1)',
-    backgroundColor: 'inherit',
+    paddingTop: 16,
+    paddingBottom: 16,
+    borderTopWidth: 2,
+    borderTopColor: '#E5E7EB',
+    backgroundColor: '#FFFFFF',
+    gap: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 8,
+  },
+  removeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    padding: 16,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: '#DC2626',
+    backgroundColor: '#FEF2F2',
+    minHeight: 52,
+  },
+  removeButtonDisabled: {
+    opacity: 0.6,
+  },
+  removeButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#DC2626',
+  },
+  removeButtonTextDisabled: {
+    color: '#9CA3AF',
   },
   directionsButton: {
     padding: 16,

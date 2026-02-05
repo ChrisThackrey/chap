@@ -26,6 +26,7 @@ export const tailwind = {
   // Amber
   amber400: '#FBBF24',
   amber500: '#F59E0B',
+  amber600: '#D97706',
   // Red (errors)
   red50: '#FEF2F2',
   red500: '#EF4444',
@@ -51,6 +52,9 @@ export const tailwind = {
   // Emerald (success)
   emerald500: '#10B981',
   emerald600: '#059669',
+  // Violet (force adjust gesture)
+  violet500: '#8B5CF6',
+  violet600: '#7C3AED',
 };
 
 const tintColorLight = tailwind.blue500;

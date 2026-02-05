@@ -1,3 +1,4 @@
+import uuid from 'react-native-uuid';
 import { RouteStop } from '@/types/route';
 import { GeocodingResult } from '@/types/validation';
 import { scoreGeocodingResult, validateCoordinatesInRegion } from './geocoding-scorer';
@@ -71,6 +72,7 @@ export async function geocodeStops(stops: Partial<RouteStop>[]): Promise<RouteSt
       const coords = await geocodeAddress(stop.address!);
 
       results.push({
+        id: uuid.v4() as string,
         ...stop,
         latitude: coords.latitude,
         longitude: coords.longitude,
@@ -84,6 +86,7 @@ export async function geocodeStops(stops: Partial<RouteStop>[]): Promise<RouteSt
       console.error(`Failed to geocode ${stop.name}:`, error);
       // Use a default coordinate if geocoding fails (San Francisco as fallback)
       results.push({
+        id: uuid.v4() as string,
         ...stop,
         latitude: 37.7749,
         longitude: -122.4194,

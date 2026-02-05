@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { StyleSheet, View, TouchableOpacity, Modal, ScrollView, Alert } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedView } from '@/components/themed-view';
 import { ThemedText } from '@/components/themed-text';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -32,6 +33,11 @@ export default function RoutePlannerScreen() {
     addStopError,
     addStop,
     clearAddStopError,
+    removeStop,
+    isRemovingStop,
+    optimizeCurrentRoute,
+    optimizationState,
+    optimizedSegments,
   } = useRouteGeneration();
   const { location: deviceLocation, requestLocation } = useUserLocation();
   const { routes: savedRoutes, loading: loadingRoutes, saveRoute, deleteRoute } = useRouteStorage();
@@ -41,6 +47,7 @@ export default function RoutePlannerScreen() {
   const [showRadiusSelector, setShowRadiusSelector] = useState(false);
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
+  const insets = useSafeAreaInsets();
 
   // Log validation warnings to console instead of displaying on screen
   useEffect(() => {
@@ -92,23 +99,45 @@ export default function RoutePlannerScreen() {
     }
   };
 
-  const handleAddStop = async (prompt: string) => {
+  const handleAddStop = async (prompt: string): Promise<{ success: boolean }> => {
+    console.log('[handleAddStop] Called with prompt:', prompt);
     // Use preferred location if set, otherwise try to get device location
     let userLoc = preferredLocation
       ? { latitude: preferredLocation.latitude, longitude: preferredLocation.longitude }
       : deviceLocation;
 
+    console.log('[handleAddStop] User location:', userLoc);
+
     if (!userLoc) {
+      console.log('[handleAddStop] No location, requesting...');
       userLoc = await requestLocation();
     }
 
     const locationContext = preferredLocation ? getLocationContext() : undefined;
+    console.log('[handleAddStop] Location context:', locationContext);
 
-    await addStop(prompt, {
+    const result = await addStop(prompt, {
       userLocation: userLoc || undefined,
       locationContext,
       maxDistanceMiles: radius?.radiusMiles || 25,
     });
+    console.log('[handleAddStop] addStop result:', result);
+
+    // ✅ Explicitly trigger optimization after successfully adding stop
+    if (result.success && result.needsOptimization && result.updatedRoute) {
+      console.log('[handleAddStop] Stop added successfully, triggering optimization...');
+      console.log('[handleAddStop] Updated route has', result.updatedRoute.stops.length, 'stops');
+      try {
+        // Pass the updated route to avoid stale closure issues
+        await optimizeCurrentRoute(result.updatedRoute);
+        console.log('[handleAddStop] Optimization complete');
+      } catch (error) {
+        console.error('[handleAddStop] Optimization failed:', error);
+        // Don't return false - the stop was still added successfully
+      }
+    }
+
+    return result;
   };
 
   const handleLoadRoute = (selectedRoute: Route) => {
@@ -227,18 +256,24 @@ export default function RoutePlannerScreen() {
       )}
 
       {state === 'success' && route && (
-        <View style={styles.successContainer}>
-          <ScrollView style={styles.summaryScroll}>
-            <RouteSummary route={route} onSave={handleSave} onRegenerate={reset} />
-          </ScrollView>
+        <View style={[styles.successContainer, { paddingTop: insets.top }]}>
           <View style={styles.mapContainer}>
             <RouteMap
               route={route}
+              optimizedSegments={optimizedSegments}
+              isOptimizing={optimizationState === 'optimizing'}
               onAddStop={handleAddStop}
               isAddingStop={isAddingStop}
               addStopError={addStopError}
               onClearAddStopError={clearAddStopError}
+              onRemoveStop={removeStop}
+              isRemovingStop={isRemovingStop}
             />
+          </View>
+          <View style={styles.summaryOverlay}>
+            <ScrollView style={styles.summaryScroll} showsVerticalScrollIndicator={false}>
+              <RouteSummary route={route} onSave={handleSave} onRegenerate={reset} />
+            </ScrollView>
           </View>
         </View>
       )}
@@ -333,10 +368,25 @@ const styles = StyleSheet.create({
   successContainer: {
     flex: 1,
   },
-  summaryScroll: {
-    maxHeight: '28%',
-  },
   mapContainer: {
     flex: 1,
+  },
+  summaryOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    maxHeight: '40%',
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  summaryScroll: {
+    flexGrow: 0,
   },
 });

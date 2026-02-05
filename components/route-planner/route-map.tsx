@@ -1,46 +1,69 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { View, StyleSheet, TouchableOpacity, ActivityIndicator, Animated, Linking, Alert, Platform, Pressable } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE, PROVIDER_DEFAULT } from 'react-native-maps';
+import Constants from 'expo-constants';
 import { ThemedText } from '@/components/themed-text';
 import { StopMarker } from './stop-marker';
 import { StopDetailModal } from './stop-detail-modal';
 import { AddStopModal } from './add-stop-modal';
+import { NavigationAppSelectorModal, NavigationApp } from './navigation-app-selector-modal';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Route, RouteStop, RouteSegment } from '@/types/route';
-import { fetchCompleteRoute, RouteCoordinate } from '@/lib/google-directions';
-import { optimizeRouteForParking } from '@/lib/route-optimizer';
+import { RouteCoordinate } from '@/lib/google-directions';
 import { MapColors, tailwind } from '@/constants/theme';
+import { validateRoute, snapshotRouteState } from '@/lib/debug-utils';
 
-// Animation configuration
-const ANIMATION_CONFIG = {
-  INITIAL_ZOOM_DELAY: 800,      // Delay before zooming to route bounds
-  ZOOM_DURATION: 1200,          // Duration of zoom animation
-  MARKER_STAGGER_DELAY: 150,    // Delay between each marker appearing
-  MARKER_FADE_DURATION: 400,    // Duration of marker fade-in
-  ROUTE_FADE_DURATION: 600,     // Duration of route line fade-in
-  ROUTE_APPEAR_DELAY: 400,      // Delay before route starts appearing
-};
+// Check if running in Expo Go (which doesn't support Google Maps on iOS)
+const isExpoGo = Constants.appOwnership === 'expo';
 
-// Pastel map style for Google Maps - soft, muted colors
+// Determine map provider - use Google on development builds, default (Apple) in Expo Go
+// Force Google Maps for development builds
+const MAP_PROVIDER = Platform.OS === 'ios' && isExpoGo ? PROVIDER_DEFAULT : PROVIDER_GOOGLE;
+
+// Debug: Temporarily disable custom style to test if Google Maps works without it
+const USE_CUSTOM_STYLE = false; // Set to true once Google Maps is confirmed working
+
+// Log map configuration on module load
+console.log('🗺️ Map Configuration:');
+console.log(`   Platform: ${Platform.OS}`);
+console.log(`   Is Expo Go: ${isExpoGo}`);
+console.log(`   Map Provider: ${MAP_PROVIDER === PROVIDER_GOOGLE ? 'Google Maps' : 'Default (Apple Maps)'}`);
+console.log(`   Google Maps API Key configured: ${!!Constants.expoConfig?.ios?.config?.googleMapsApiKey}`);
+
+// Pastel map style for Google Maps - tailwind-inspired soft colors
 const PASTEL_MAP_STYLE = [
-  { elementType: 'geometry', stylers: [{ color: '#f5f5f5' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#616161' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#f5f5f5' }] },
-  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#c9c9c9' }] },
-  { featureType: 'administrative.land_parcel', elementType: 'labels.text.fill', stylers: [{ color: '#bdbdbd' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#ffffff' }] },
-  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#e0e0e0' }] },
-  { featureType: 'road.arterial', elementType: 'labels.text.fill', stylers: [{ color: '#757575' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#f8e8d6' }] },
-  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#e8d4c0' }] },
-  { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#616161' }] },
-  { featureType: 'road.local', elementType: 'labels.text.fill', stylers: [{ color: '#9e9e9e' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#c9e4f5' }] },
-  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#9e9e9e' }] },
-  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#d4edda' }] },
-  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#6b9a77' }] },
+  // Base geometry - soft gray from tailwind gray-50
+  { elementType: 'geometry', stylers: [{ color: '#F9FAFB' }] },
+  // Labels - gray-600 for readability
+  { elementType: 'labels.text.fill', stylers: [{ color: '#4B5563' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#FFFFFF' }] },
+  // Administrative boundaries - gray-300
+  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#D1D5DB' }] },
+  { featureType: 'administrative.land_parcel', elementType: 'labels.text.fill', stylers: [{ color: '#9CA3AF' }] },
+  // Roads - white with subtle gray stroke
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#FFFFFF' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#E5E7EB' }] },
+  { featureType: 'road.arterial', elementType: 'labels.text.fill', stylers: [{ color: '#6B7280' }] },
+  // Highways - soft amber/yellow tint (amber-100)
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#FEF3C7' }] },
+  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#FDE68A' }] },
+  { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#4B5563' }] },
+  { featureType: 'road.local', elementType: 'labels.text.fill', stylers: [{ color: '#9CA3AF' }] },
+  // Water - soft blue (blue-100)
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#DBEAFE' }] },
+  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#60A5FA' }] },
+  // Parks - soft emerald/green (emerald-100)
+  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#D1FAE5' }] },
+  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#059669' }] },
+  // Landscape - subtle warm tint
+  { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#F3F4F6' }] },
+  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#ECFDF5' }] },
+  // Hide POI labels for cleaner look
   { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi.business', stylers: [{ visibility: 'off' }] },
+  // Hide transit for cleaner look
   { featureType: 'transit', elementType: 'labels', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit.station', stylers: [{ visibility: 'off' }] },
 ];
 
 // Threshold for considering stops as overlapping (in degrees)
@@ -194,175 +217,175 @@ function calculateStopPositions(stops: RouteStop[]): StopWithOffset[] {
 
 interface RouteMapProps {
   route: Route;
-  onAddStop?: (prompt: string) => void;
+  optimizedSegments?: RouteSegment[];
+  isOptimizing?: boolean;
+  onAddStop?: (prompt: string) => Promise<{ success: boolean }>;
   isAddingStop?: boolean;
   addStopError?: string | null;
   onClearAddStopError?: () => void;
+  onRemoveStop?: (stopId: string) => Promise<void>;
+  isRemovingStop?: boolean;
 }
 
 export function RouteMap({
   route,
+  optimizedSegments = [],
+  isOptimizing = false,
   onAddStop,
   isAddingStop = false,
   addStopError = null,
   onClearAddStopError,
+  onRemoveStop,
+  isRemovingStop = false,
 }: RouteMapProps) {
+  // Debug: Log props on mount and updates
+  useEffect(() => {
+    console.log('🔍 [RouteMap] Component props updated');
+    console.log('   - onAddStop provided:', !!onAddStop);
+    console.log('   - isAddingStop:', isAddingStop);
+    console.log('   - addStopError:', addStopError);
+    console.log('   - Route stops:', route.stops.length);
+
+    // Validate and snapshot route whenever it changes
+    snapshotRouteState(route, 'RouteMap:PropsUpdate');
+    validateRoute(route, 'RouteMap:PropsUpdate');
+  }, [onAddStop, isAddingStop, addStopError, route.stops.length, route]);
+
   const [selectedStop, setSelectedStop] = useState<RouteStop | null>(null);
   const [showAddStopModal, setShowAddStopModal] = useState(false);
   const [showAddStopTooltip, setShowAddStopTooltip] = useState(false);
-  const [previousStopCount, setPreviousStopCount] = useState(route.stops.length);
-
-  // Close modal when a stop is successfully added (stop count increased and not loading)
-  useEffect(() => {
-    if (route.stops.length > previousStopCount && !isAddingStop) {
-      // A new stop was added successfully
-      setShowAddStopModal(false);
-      setPreviousStopCount(route.stops.length);
-    } else if (route.stops.length !== previousStopCount) {
-      // Stop count changed (could be deletion), update tracking
-      setPreviousStopCount(route.stops.length);
-    }
-  }, [route.stops.length, isAddingStop, previousStopCount]);
+  const [showNavSelectorModal, setShowNavSelectorModal] = useState(false);
+  const [isExportingRoute, setIsExportingRoute] = useState(false);
   const [routeCoordinates, setRouteCoordinates] = useState<RouteCoordinate[]>([]);
   const [routeSegments, setRouteSegments] = useState<RouteSegment[]>([]);
   const [isLoadingRoute, setIsLoadingRoute] = useState(false);
   const [currentRegion, setCurrentRegion] = useState<any>(null);
   const [mapStatus, setMapStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [hasAnimatedIn, setHasAnimatedIn] = useState(false);
+  const [markersKey, setMarkersKey] = useState(0); // Force marker re-render
+  const [tracksViewChanges, setTracksViewChanges] = useState(false); // Temporarily enable tracking during updates
   const mapRef = useRef<MapView>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Calculate offset positions for overlapping stops
-  const stopsWithOffsets = useMemo(() => calculateStopPositions(route.stops), [route.stops]);
+  // Filter out any stops with invalid coordinates to prevent crashes
+  const stopsWithOffsets = useMemo(() => {
+    console.log('🔄 [RouteMap] Recalculating stopsWithOffsets');
+    console.log(`   Input stops: ${route.stops.length}`);
+    console.log(`   Stop IDs: ${route.stops.map(s => s.id).join(', ')}`);
 
-  // Animation values for markers - use Maps keyed by stop.order to handle insertions correctly
-  const markerAnimationsRef = useRef<Map<number, Animated.Value>>(new Map());
-  const markerScalesRef = useRef<Map<number, Animated.Value>>(new Map());
-  const prevStopOrdersRef = useRef<Set<number>>(new Set());
+    const validStops = route.stops.filter(stop =>
+      typeof stop.latitude === 'number' &&
+      typeof stop.longitude === 'number' &&
+      !isNaN(stop.latitude) &&
+      !isNaN(stop.longitude) &&
+      stop.latitude !== 0 &&
+      stop.longitude !== 0
+    );
 
-  // Update animation Maps when stops change - keyed by stop.order for correct insertion handling
-  useEffect(() => {
-    const currentOrders = new Set(route.stops.map(s => s.order));
-    const prevOrders = prevStopOrdersRef.current;
-
-    // Find new stops (orders that exist now but didn't before)
-    const newOrders: number[] = [];
-    currentOrders.forEach(order => {
-      if (!prevOrders.has(order)) {
-        newOrders.push(order);
-      }
-    });
-
-    // Find removed stops (orders that existed before but don't now)
-    const removedOrders: number[] = [];
-    prevOrders.forEach(order => {
-      if (!currentOrders.has(order)) {
-        removedOrders.push(order);
-      }
-    });
-
-    // Initialize animation values for new stops
-    if (newOrders.length > 0) {
-      console.log(`📍 Adding animation values for new stop(s) with orders: ${newOrders.join(', ')}`);
-
-      newOrders.forEach(order => {
-        // Start at 0 for new stops (will animate in)
-        markerAnimationsRef.current.set(order, new Animated.Value(0));
-        markerScalesRef.current.set(order, new Animated.Value(0));
-      });
-
-      // Animate the new markers after a short delay
-      setTimeout(() => {
-        newOrders.forEach(order => {
-          const scaleAnim = markerScalesRef.current.get(order);
-          const opacityAnim = markerAnimationsRef.current.get(order);
-
-          if (scaleAnim) {
-            // Pop-in animation for new marker
-            Animated.spring(scaleAnim, {
-              toValue: 1.2,
-              friction: 5,
-              tension: 100,
-              useNativeDriver: true,
-            }).start(() => {
-              Animated.spring(scaleAnim, {
-                toValue: 1,
-                friction: 8,
-                tension: 120,
-                useNativeDriver: true,
-              }).start();
-            });
-          }
-
-          if (opacityAnim) {
-            Animated.timing(opacityAnim, {
-              toValue: 1,
-              duration: 300,
-              useNativeDriver: true,
-            }).start();
-          }
-        });
-      }, 100);
-
-      // Fit map to show all stops including new one
-      setTimeout(() => {
-        mapRef.current?.fitToCoordinates(
-          route.stops.map(s => ({ latitude: s.latitude, longitude: s.longitude })),
-          { edgePadding: { top: 100, right: 60, bottom: 100, left: 60 }, animated: true }
-        );
-      }, 300);
+    if (validStops.length !== route.stops.length) {
+      console.warn(`⚠️ Filtered out ${route.stops.length - validStops.length} stops with invalid coordinates`);
     }
 
-    // Clean up animation values for removed stops
-    if (removedOrders.length > 0) {
-      console.log(`📍 Removing animation values for removed stop(s) with orders: ${removedOrders.join(', ')}`);
-      removedOrders.forEach(order => {
-        markerAnimationsRef.current.delete(order);
-        markerScalesRef.current.delete(order);
-      });
-    }
-
-    // Ensure all current stops have animation values (for initial load)
-    route.stops.forEach(stop => {
-      if (!markerAnimationsRef.current.has(stop.order)) {
-        markerAnimationsRef.current.set(stop.order, new Animated.Value(1));
-      }
-      if (!markerScalesRef.current.has(stop.order)) {
-        markerScalesRef.current.set(stop.order, new Animated.Value(1));
-      }
-    });
-
-    prevStopOrdersRef.current = currentOrders;
+    console.log(`   Valid stops for rendering: ${validStops.length}`);
+    const result = calculateStopPositions(validStops);
+    console.log(`   Calculated positions for ${result.length} markers`);
+    return result;
   }, [route.stops]);
+
+  // Track previous stop count to fit map when stops are added/removed
+  const prevStopCountRef = useRef(route.stops.length);
+
+  // Fit map to show all stops when stops are added or removed
+  useEffect(() => {
+    const stopCountChanged = route.stops.length !== prevStopCountRef.current;
+
+    if (stopCountChanged && hasAnimatedIn && route.stops.length >= 2) {
+      const wasAdded = route.stops.length > prevStopCountRef.current;
+      const wasRemoved = route.stops.length < prevStopCountRef.current;
+
+      console.log(`🗺️ [RouteMap] Stop count changed from ${prevStopCountRef.current} to ${route.stops.length}`);
+      console.log(`   Action: ${wasAdded ? 'Added' : wasRemoved ? 'Removed' : 'Changed'}`);
+
+      // Fit map to show all remaining stops
+      setTimeout(() => {
+        if (mapRef.current && route.stops.length > 0) {
+          console.log('🗺️ [RouteMap] Re-fitting map to show all stops');
+          mapRef.current.fitToCoordinates(
+            route.stops.map(s => ({ latitude: s.latitude, longitude: s.longitude })),
+            { edgePadding: { top: 100, right: 60, bottom: 100, left: 60 }, animated: true }
+          );
+        }
+      }, 300); // Slightly longer delay for removal to allow segments to update first
+    }
+
+    prevStopCountRef.current = route.stops.length;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route.stops.length, hasAnimatedIn]);
+
   // Initialize controls opacity to 0 (will fade in)
   const controlsOpacity = useRef(new Animated.Value(0)).current;
 
-  // Debug: Log component mount and initial state (intentionally runs only on mount)
+  // Debug: Log when route stops change
   useEffect(() => {
-    console.log('🗺️ RouteMap mounted with route:', route?.stops?.length, 'stops');
-    console.log('🗺️ Route stops:', route.stops.map(s => `${s.name} (${s.latitude}, ${s.longitude})`));
-    console.log('🗺️ Map provider: Google Maps');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    console.log('🗺️ RouteMap route updated:', route?.stops?.length, 'stops');
+    console.log('🗺️ Stop names:', route.stops.map(s => s.name).join(', '));
+    console.log('🗺️ Stop IDs:', route.stops.map(s => s.id).join(', '));
+  }, [route.stops]);
+
+  // Force markers to re-render when stops change
+  useEffect(() => {
+    console.log('🔄 [RouteMap] Forcing marker re-render - stops changed');
+    console.log(`   Stop count: ${route.stops.length}`);
+    console.log(`   Stop IDs: ${route.stops.map(s => s.id).join(', ')}`);
+
+    // Increment key to force React to remount markers
+    setMarkersKey(prev => prev + 1);
+
+    // Temporarily enable tracksViewChanges to force marker updates
+    setTracksViewChanges(true);
+
+    // Disable tracking after markers have updated (500ms should be enough)
+    const timeout = setTimeout(() => {
+      console.log('🔄 [RouteMap] Disabling tracksViewChanges after marker update');
+      setTracksViewChanges(false);
+    }, 500);
+
+    return () => clearTimeout(timeout);
+  }, [route.stops.length, JSON.stringify(route.stops.map(s => s.id))]);
 
   // Set up Google Maps initialization timeout
   useEffect(() => {
     setMapStatus('loading');
     console.log('🗺️ Using: Google Maps');
 
-    // Set a longer timeout for Google Maps initialization
+    // Fallback: force map to ready state after 3 seconds if callbacks don't fire
     timeoutRef.current = setTimeout(() => {
-      console.warn('Google Maps initialization taking longer than expected');
-      // Don't set error - just log warning, map may still initialize
-    }, 15000);
+      setMapStatus((current) => {
+        if (current === 'loading') {
+          console.warn('⚠️ Google Maps callbacks not firing - forcing ready state');
+          return 'ready';
+        }
+        return current;
+      });
+    }, 3000);
+
+    // Additional fallback: ensure controls are visible after 5 seconds
+    const controlsTimeout = setTimeout(() => {
+      if (!hasAnimatedIn) {
+        console.warn('⚠️ Controls animation did not complete - forcing visibility');
+        controlsOpacity.setValue(1);
+      }
+    }, 5000);
 
     return () => {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
         timeoutRef.current = null;
       }
+      clearTimeout(controlsTimeout);
     };
-  }, []);
+  }, [controlsOpacity, hasAnimatedIn]);
 
   // Calculate map bounds from route stops
   const bounds = useMemo(() => {
@@ -410,75 +433,67 @@ export function RouteMap({
     }));
   }, [route.stops]);
 
-  // Fetch road-following route with parking optimization
+  // Use optimized segments from parent when available
   useEffect(() => {
-    if (route.stops.length < 2) {
-      // Single stop, no route needed
+    console.log('🔍 [RouteMap] Segments updated from parent');
+    console.log(`🔍 [RouteMap] Optimized segments:`, optimizedSegments.length);
+    console.log(`🔍 [RouteMap] Is optimizing:`, isOptimizing);
+
+    if (isOptimizing) {
+      console.log('🔍 [RouteMap] Optimization in progress, showing loading state');
+      setIsLoadingRoute(true);
       setRouteSegments([]);
       setRouteCoordinates([]);
       return;
     }
 
-    let isMounted = true;
-    setIsLoadingRoute(true);
+    if (route.stops.length < 2) {
+      console.log('🔍 [RouteMap] Less than 2 stops, clearing route');
+      setRouteSegments([]);
+      setRouteCoordinates([]);
+      setIsLoadingRoute(false);
+      return;
+    }
 
-    console.log('🗺️ Starting route optimization for', route.stops.length, 'stops');
+    if (optimizedSegments.length > 0) {
+      console.log('🔍 [RouteMap] Using optimized segments from parent');
 
-    // Try optimized route with parking detection first
-    optimizeRouteForParking(route.stops)
-      .then(({ optimizedStops, segments }) => {
-        if (isMounted) {
-          console.log('✅ Route segments loaded:', segments.length, 'segments');
-          console.log('   Walking segments:', segments.filter(s => s.mode === 'walking').length);
-          console.log('   Driving segments:', segments.filter(s => s.mode === 'driving').length);
+      // Validate segments before using them
+      const hasInvalidSegments = optimizedSegments.some(seg =>
+        seg.coordinates.some(c =>
+          !c.latitude || !c.longitude || isNaN(c.latitude) || isNaN(c.longitude) ||
+          c.latitude === 0 || c.longitude === 0
+        )
+      );
 
-          if (segments.length > 0) {
-            setRouteSegments(segments);
-            setRouteCoordinates([]); // Clear old coordinates
-          } else {
-            console.warn('⚠️ No segments returned, falling back to simple route');
-            // Fallback if no segments
-            return fetchCompleteRoute(stopCoordinates).then(coords => {
-              if (isMounted) {
-                setRouteCoordinates(coords);
-                setRouteSegments([]);
-              }
-            });
-          }
-          setIsLoadingRoute(false);
-        }
-      })
-      .catch((error) => {
-        console.error('❌ Error optimizing route:', error);
-        if (isMounted) {
-          console.log('🔄 Falling back to simple driving route');
-          // Fallback to simple driving route
-          fetchCompleteRoute(stopCoordinates)
-            .then(coords => {
-              if (isMounted) {
-                console.log('✅ Fallback route loaded:', coords.length, 'points');
-                setRouteCoordinates(coords);
-                setRouteSegments([]); // Clear segments to use fallback rendering
-                setIsLoadingRoute(false);
-              }
-            })
-            .catch((fallbackError) => {
-              console.error('❌ Fallback route also failed:', fallbackError);
-              if (isMounted) {
-                // Final fallback: straight lines
-                console.log('🔄 Using straight lines between stops');
-                setRouteCoordinates(stopCoordinates);
-                setRouteSegments([]);
-                setIsLoadingRoute(false);
-              }
-            });
-        }
-      });
+      if (hasInvalidSegments) {
+        console.error('❌ [RouteMap] Optimized segments contain invalid coordinates');
+        setRouteSegments([]);
+        setRouteCoordinates([]);
+        setIsLoadingRoute(false);
+        return;
+      }
 
-    return () => {
-      isMounted = false;
-    };
-  }, [route.stops, stopCoordinates]);
+      setRouteSegments(optimizedSegments);
+      setRouteCoordinates([]);
+      setIsLoadingRoute(false);
+    } else {
+      console.log('🔍 [RouteMap] No optimized segments, using fallback straight lines');
+      // Fallback: show straight lines between stops
+      const validCoords = stopCoordinates.filter(c =>
+        typeof c.latitude === 'number' &&
+        typeof c.longitude === 'number' &&
+        !isNaN(c.latitude) &&
+        !isNaN(c.longitude) &&
+        c.latitude !== 0 &&
+        c.longitude !== 0
+      );
+
+      setRouteCoordinates(validCoords);
+      setRouteSegments([]);
+      setIsLoadingRoute(false);
+    }
+  }, [optimizedSegments, isOptimizing, route.stops.length, stopCoordinates]);
 
   // Animate map and elements when ready
   useEffect(() => {
@@ -495,55 +510,15 @@ export function RouteMap({
         );
       }
 
-      // Animate markers with staggered pop-in effect (scale 0 → 1.15 → 1)
-      const markerTimer = setTimeout(() => {
-        console.log('🎬 Animating markers with bounce effect');
-        route.stops.forEach((stop, index) => {
-          setTimeout(() => {
-            const scaleAnim = markerScalesRef.current.get(stop.order);
-            const opacityAnim = markerAnimationsRef.current.get(stop.order);
-
-            if (scaleAnim) {
-              // First animate to slightly larger than normal (overshoot)
-              Animated.spring(scaleAnim, {
-                toValue: 1.15,
-                friction: 6,
-                tension: 100,
-                useNativeDriver: true,
-              }).start(() => {
-                // Then settle back to normal size
-                Animated.spring(scaleAnim, {
-                  toValue: 1,
-                  friction: 8,
-                  tension: 120,
-                  useNativeDriver: true,
-                }).start();
-              });
-            }
-
-            if (opacityAnim) {
-              // Fade in the marker
-              Animated.timing(opacityAnim, {
-                toValue: 1,
-                duration: 200,
-                useNativeDriver: true,
-              }).start();
-            }
-          }, index * ANIMATION_CONFIG.MARKER_STAGGER_DELAY);
-        });
-      }, 200); // Small delay to let map settle
-
       // Fade in controls
       Animated.timing(controlsOpacity, {
         toValue: 1,
         duration: 400,
         delay: 300,
         useNativeDriver: true,
-      }).start();
-
-      return () => {
-        clearTimeout(markerTimer);
-      };
+      }).start(() => {
+        console.log('✅ Controls fade-in animation completed - buttons should be visible');
+      });
     }
   }, [mapStatus, route.stops, hasAnimatedIn, controlsOpacity]);
 
@@ -643,6 +618,74 @@ export function RouteMap({
     }
   }, [route.stops]);
 
+  // Export route to Google Maps with all stops as waypoints
+  const exportToGoogleMaps = useCallback(async () => {
+    if (route.stops.length === 0) {
+      Alert.alert('No Stops', 'There are no stops to export.');
+      return;
+    }
+
+    // Sort stops by order
+    const sortedStops = [...route.stops].sort((a, b) => a.order - b.order);
+
+    // Build Google Maps URL with waypoints
+    // Format: https://www.google.com/maps/dir/?api=1&origin=LAT,LNG&destination=LAT,LNG&waypoints=LAT,LNG|LAT,LNG&travelmode=driving
+    const firstStop = sortedStops[0];
+    const lastStop = sortedStops[sortedStops.length - 1];
+    const middleStops = sortedStops.slice(1, -1);
+
+    // Origin (first stop)
+    const origin = `${firstStop.latitude},${firstStop.longitude}`;
+
+    // Destination (last stop)
+    const destination = `${lastStop.latitude},${lastStop.longitude}`;
+
+    // Waypoints (middle stops, separated by |)
+    // Note: Mobile browsers support up to 3 waypoints, but we'll include all and let Google handle it
+    const waypoints = middleStops
+      .map(stop => `${stop.latitude},${stop.longitude}`)
+      .join('|');
+
+    // Build the full URL using cross-platform Maps URLs (works via Universal Links on iOS)
+    let url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
+
+    // Add waypoints if there are intermediate stops
+    if (waypoints) {
+      url += `&waypoints=${encodeURIComponent(waypoints)}`;
+    }
+
+    console.log('🗺️ Opening Google Maps with route:', url);
+
+    try {
+      // Open URL - Google Maps app will intercept via Universal Links on iOS
+      // On Android, Google Maps app handles the URL if installed
+      await Linking.openURL(url);
+    } catch (error) {
+      console.error('Error opening Google Maps:', error);
+      Alert.alert(
+        'Unable to Open Google Maps',
+        'Could not open Google Maps. Please try again.'
+      );
+    }
+  }, [route.stops]);
+
+  // Handle navigation app selection
+  const handleNavigationAppSelect = useCallback(async (app: NavigationApp) => {
+    setIsExportingRoute(true);
+    try {
+      if (app === 'apple') {
+        await exportToAppleMaps();
+      } else {
+        await exportToGoogleMaps();
+      }
+      setShowNavSelectorModal(false);
+    } catch (error) {
+      console.error('Error exporting route:', error);
+    } finally {
+      setIsExportingRoute(false);
+    }
+  }, [exportToAppleMaps, exportToGoogleMaps]);
+
   // Log map status changes to console instead of displaying on screen
   useEffect(() => {
     if (mapStatus === 'error') {
@@ -655,8 +698,8 @@ export function RouteMap({
       <MapView
         ref={mapRef}
         style={styles.map}
-        provider={PROVIDER_GOOGLE}
-        customMapStyle={PASTEL_MAP_STYLE}
+        provider={MAP_PROVIDER}
+        customMapStyle={USE_CUSTOM_STYLE && MAP_PROVIDER === PROVIDER_GOOGLE ? PASTEL_MAP_STYLE : undefined}
         initialRegion={initialRegion}
         showsCompass={true}
         showsScale={true}
@@ -674,7 +717,8 @@ export function RouteMap({
         }}
         onMapReady={() => {
           console.log('✅ MapView onMapReady called - native map initialized');
-          console.log('   Provider: Google Maps');
+          console.log(`   Provider: ${MAP_PROVIDER === PROVIDER_GOOGLE ? 'Google Maps' : 'Apple Maps'}`);
+          console.log('   Custom style rules:', MAP_PROVIDER === PROVIDER_GOOGLE ? PASTEL_MAP_STYLE.length : 'N/A (Apple Maps)');
           console.log(`   Timestamp: ${new Date().toISOString()}`);
 
           // Clear the timeout since map loaded successfully
@@ -693,7 +737,8 @@ export function RouteMap({
         }}
       >
         {/* Route segments with 3-layer effect (shadow, main, glow) */}
-        {!isLoadingRoute && routeSegments.length > 0 && (
+        {/* Guard: Only render when map is ready and not loading to prevent native crash */}
+        {mapStatus === 'ready' && !isLoadingRoute && routeSegments.length > 0 && (
           <>
             {routeSegments.map((segment) => {
               const colors = segment.mode === 'walking'
@@ -735,7 +780,8 @@ export function RouteMap({
         )}
 
         {/* Fallback: route line with 3-layer effect */}
-        {!isLoadingRoute && routeCoordinates.length > 0 && routeSegments.length === 0 && (
+        {/* Guard: Only render when map is ready and not loading to prevent native crash */}
+        {mapStatus === 'ready' && !isLoadingRoute && routeCoordinates.length > 0 && routeSegments.length === 0 && (
           <>
             {/* Shadow layer */}
             <Polyline
@@ -764,39 +810,33 @@ export function RouteMap({
           </>
         )}
 
-        {/* Parking location markers - animated */}
-        {route.stops
+        {/* Parking location markers */}
+        {/* Guard: Only render when map is ready to prevent native crash */}
+        {mapStatus === 'ready' && route.stops
           .filter(stop => stop.parkingLocation)
           .map((stop) => (
             <Marker
-              key={`parking-${stop.order}`}
+              key={`parking-${stop.id}-${markersKey}`}
               coordinate={{
                 latitude: stop.parkingLocation!.latitude,
                 longitude: stop.parkingLocation!.longitude,
               }}
               anchor={{ x: 0.5, y: 0.5 }}
-              tracksViewChanges={true}
+              tracksViewChanges={tracksViewChanges}
             >
-              <Animated.View
-                style={[
-                  styles.parkingMarker,
-                  {
-                    opacity: markerAnimationsRef.current.get(stop.order) ?? new Animated.Value(1),
-                    transform: [{ scale: markerScalesRef.current.get(stop.order) ?? new Animated.Value(1) }],
-                  },
-                ]}
-              >
+              <View style={styles.parkingMarker}>
                 <IconSymbol name="parkingsign.circle.fill" size={32} color={MapColors.parking} />
-              </Animated.View>
+              </View>
             </Marker>
           ))}
 
         {/* Offset indicator lines - dashed lines from offset marker to true location */}
-        {stopsWithOffsets
+        {/* Guard: Only render when map is ready to prevent native crash */}
+        {mapStatus === 'ready' && stopsWithOffsets
           .filter(({ isOffset }) => isOffset)
           .map(({ stop, displayLat, displayLng }) => (
             <Polyline
-              key={`offset-line-${stop.order}`}
+              key={`offset-line-${stop.id}-${markersKey}`}
               coordinates={[
                 { latitude: displayLat, longitude: displayLng },
                 { latitude: stop.latitude, longitude: stop.longitude },
@@ -809,30 +849,20 @@ export function RouteMap({
           ))}
 
         {/* Stop markers with floating title labels - using offset positions */}
-        {stopsWithOffsets.map(({ stop, displayLat, displayLng }) => (
+        {/* Guard: Only render when map is ready to prevent native crash */}
+        {mapStatus === 'ready' && stopsWithOffsets.map(({ stop, displayLat, displayLng }) => (
           <Marker
-            key={stop.order}
-            identifier={`marker-${stop.order}`}
+            key={`${stop.id}-${markersKey}`}
+            identifier={`marker-${stop.id}-${markersKey}`}
             coordinate={{
               latitude: displayLat,
               longitude: displayLng,
             }}
-            anchor={{ x: 0.5, y: 1 }} // Anchor at bottom center to position label above
-            tracksViewChanges={true} // Enable for animations
-            onPress={() => setSelectedStop(stop)} // Use Marker's native onPress instead of TouchableOpacity
+            anchor={{ x: 0.5, y: 1 }}
+            tracksViewChanges={tracksViewChanges}
+            onPress={() => setSelectedStop(stop)}
           >
-            <Animated.View
-              style={[
-                styles.markerContainer,
-                {
-                  opacity: markerAnimationsRef.current.get(stop.order) ?? new Animated.Value(1),
-                  transform: [
-                    { scale: markerScalesRef.current.get(stop.order) ?? new Animated.Value(1) },
-                  ],
-                },
-              ]}
-            >
-              {/* Floating label above marker */}
+            <View style={styles.markerContainer}>
               <View style={styles.floatingLabel}>
                 <ThemedText
                   style={styles.floatingLabelText}
@@ -842,12 +872,10 @@ export function RouteMap({
                   {stop.name}
                 </ThemedText>
               </View>
-
-              {/* Marker icon below label */}
               <View style={{ overflow: 'visible' }}>
                 <StopMarker type={stop.type} stopNumber={stop.order} />
               </View>
-            </Animated.View>
+            </View>
           </Marker>
         ))}
       </MapView>
@@ -867,7 +895,10 @@ export function RouteMap({
         <Animated.View style={[styles.addStopButtonContainer, { opacity: controlsOpacity }]}>
           <Pressable
             style={styles.addStopButton}
-            onPress={() => setShowAddStopModal(true)}
+            onPress={() => {
+              console.log('🔘 Add Stop button pressed - opening modal');
+              setShowAddStopModal(true);
+            }}
             onHoverIn={() => Platform.OS === 'web' && setShowAddStopTooltip(true)}
             onHoverOut={() => Platform.OS === 'web' && setShowAddStopTooltip(false)}
             accessibilityLabel="Add Venue"
@@ -885,11 +916,11 @@ export function RouteMap({
         </Animated.View>
       )}
 
-      {/* Export to Apple Maps Button - top right */}
+      {/* Export to Navigation App Button - top right */}
       <Animated.View style={[styles.exportButtonContainer, { opacity: controlsOpacity }]}>
         <TouchableOpacity
           style={styles.exportButton}
-          onPress={exportToAppleMaps}
+          onPress={() => setShowNavSelectorModal(true)}
           activeOpacity={0.8}
         >
           <IconSymbol name="arrow.triangle.turn.up.right.diamond.fill" size={18} color="#FFFFFF" />
@@ -924,23 +955,46 @@ export function RouteMap({
         totalStops={route.stops.length}
         visible={selectedStop !== null}
         onClose={() => setSelectedStop(null)}
+        onRemoveStop={onRemoveStop}
+        isRemovingStop={isRemovingStop}
       />
 
       {/* Add stop modal */}
       {onAddStop && (
         <AddStopModal
           visible={showAddStopModal}
-          onClose={() => setShowAddStopModal(false)}
-          onSubmit={(prompt) => {
-            // Don't close modal here - let it stay open during loading
-            // Modal will be closed via useEffect when isAddingStop becomes false
-            onAddStop(prompt);
+          onClose={() => {
+            console.log('🔘 Add Stop modal closing');
+            setShowAddStopModal(false);
+          }}
+          onSubmit={async (prompt) => {
+            console.log('🔘 Add Stop modal submitted with prompt:', prompt);
+            try {
+              const result = await onAddStop(prompt);
+              console.log('🔘 onAddStop result:', result);
+              if (result?.success) {
+                console.log('✅ Add Stop successful - closing modal');
+                setShowAddStopModal(false);
+              } else {
+                console.log('❌ Add Stop failed');
+              }
+            } catch (error) {
+              console.error('❌ Add Stop threw error:', error);
+            }
           }}
           isLoading={isAddingStop}
           error={addStopError}
           onClearError={onClearAddStopError || (() => {})}
         />
       )}
+
+      {/* Navigation app selector modal */}
+      <NavigationAppSelectorModal
+        visible={showNavSelectorModal}
+        onClose={() => setShowNavSelectorModal(false)}
+        onSelect={handleNavigationAppSelect}
+        isExporting={isExportingRoute}
+      />
     </View>
   );
 }
@@ -987,12 +1041,6 @@ const styles = StyleSheet.create({
     borderRadius: 23,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: MapColors.controls.shadow,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 1,
-    shadowRadius: 8,
-    elevation: 6,
-    borderWidth: 1,
   },
   tooltip: {
     position: 'absolute',
@@ -1048,13 +1096,6 @@ const styles = StyleSheet.create({
     borderRadius: 23,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: MapColors.controls.shadow,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 1,
-    shadowRadius: 8,
-    elevation: 6,
-    borderWidth: 1,
-    borderColor: MapColors.controls.border,
   },
   extentsButton: {
     marginBottom: 6,

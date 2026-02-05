@@ -1,7 +1,7 @@
 import { ScrollView, StyleSheet, Dimensions } from 'react-native';
 import { Image } from 'expo-image';
 import { VenuePhoto } from '@/types/route';
-import { buildPhotoUrl } from '@/lib/foursquare';
+import { buildDisplayPhotoUrl } from '@/lib/google-places';
 
 interface PhotoCarouselProps {
   photos: VenuePhoto[];
@@ -28,7 +28,7 @@ export function PhotoCarousel({ photos }: PhotoCarouselProps) {
       {photos.map((photo, index) => (
         <Image
           key={index}
-          source={{ uri: buildPhotoUrl(photo, `${PHOTO_WIDTH}x${PHOTO_HEIGHT}`) }}
+          source={{ uri: buildDisplayPhotoUrl(photo, `${PHOTO_WIDTH}x${PHOTO_HEIGHT}`) }}
           style={styles.photo}
           contentFit="cover"
           transition={200}

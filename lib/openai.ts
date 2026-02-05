@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 
 export const openai = new OpenAI({
   apiKey: process.env.EXPO_PUBLIC_OPENAI_API_KEY,
+  dangerouslyAllowBrowser: true, // Required for React Native/Expo environment
 });
 
 export const MODEL = 'gpt-4o';

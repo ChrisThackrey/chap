@@ -114,7 +114,7 @@ export function RouteSummary({ route, onSave, onRegenerate }: RouteSummaryProps)
 const styles = StyleSheet.create({
   container: {
     paddingHorizontal: 16,
-    paddingTop: 48,
+    paddingTop: 16,
     paddingBottom: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',

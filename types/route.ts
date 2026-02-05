@@ -27,7 +27,8 @@ export interface VenuePhoto {
 }
 
 export interface VenueDetails {
-  placeId: string; // Foursquare FSQ ID
+  placeId: string; // Foursquare FSQ ID or Google Place ID
+  provider?: 'google' | 'foursquare' | 'geocoding'; // Data source provider
   rating?: number; // 0-10 scale
   ratingColor?: string; // Foursquare rating color
   price?: number; // 1-4 scale ($ to $$$$)
@@ -55,6 +56,7 @@ export interface ParkingLocation {
 }
 
 export interface RouteStop {
+  id: string; // Stable unique identifier (UUID) - never changes after creation
   name: string;
   type: StopType;
   description: string;
