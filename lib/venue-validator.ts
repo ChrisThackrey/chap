@@ -137,7 +137,8 @@ export async function validateAndEnrichStops(
         maxRadiusMeters,
         maxDistanceKm,
         primaryProvider,
-        originalPrompt
+        originalPrompt,
+        validatedStops
       );
       validatedStops.push(result.data);
       warnings.push(...result.warnings);
@@ -183,10 +184,16 @@ async function validateStopWithProviderChain(
   maxRadiusMeters?: number,
   maxDistanceKm?: number,
   primaryProvider?: 'google' | 'foursquare',
-  originalPrompt?: string
+  originalPrompt?: string,
+  previousStops?: RouteStop[]
 ): Promise<RouteValidationResult<RouteStop>> {
   const expandedRadius = maxRadiusMeters || VALIDATION_CONFIG.EXPANDED_RADIUS;
   const regionDistanceKm = maxDistanceKm || VALIDATION_CONFIG.MAX_REGION_DISTANCE_KM;
+
+  // Progressive radius tightening: later stops search in a smaller area
+  const stopNum = (stopIndex ?? 0) + 1;
+  const radiusScale = stopNum === 1 ? 1.0 : stopNum === 2 ? 0.8 : stopNum === 3 ? 0.65 : 0.5;
+  const effectiveRadius = expandedRadius * radiusScale;
   if (!stop.name || !stop.type || !stop.address) {
     throw new Error('Invalid stop: missing required fields');
   }
@@ -213,9 +220,10 @@ async function validateStopWithProviderChain(
       stop,
       userLocation,
       stopIndex,
-      expandedRadius,
+      effectiveRadius,
       regionDistanceKm,
-      warnings
+      warnings,
+      previousStops
     );
     if (directResult) {
       console.log(`[Strategy 0] Found venue directly from prompt: ${directResult.data.name}`);
@@ -226,7 +234,7 @@ async function validateStopWithProviderChain(
 
   // Try Google Places first (if available)
   if (primaryProvider === 'google' || isGooglePlacesConfigured()) {
-    const googleResult = await tryGooglePlaces(stop, userLocation, stopIndex, expandedRadius, regionDistanceKm, warnings);
+    const googleResult = await tryGooglePlaces(stop, userLocation, stopIndex, effectiveRadius, regionDistanceKm, warnings, undefined, previousStops);
     if (googleResult) {
       return googleResult;
     }
@@ -235,7 +243,7 @@ async function validateStopWithProviderChain(
 
   // Try Foursquare as fallback (if available)
   if (isFoursquareConfigured()) {
-    const foursquareResult = await tryFoursquare(stop, userLocation, stopIndex, expandedRadius, regionDistanceKm, warnings);
+    const foursquareResult = await tryFoursquare(stop, userLocation, stopIndex, effectiveRadius, regionDistanceKm, warnings, undefined, previousStops);
     if (foursquareResult) {
       return foursquareResult;
     }
@@ -258,10 +266,11 @@ async function tryDirectPromptSearch(
   stopIndex?: number,
   expandedRadius?: number,
   regionDistanceKm?: number,
-  warnings?: ValidationWarning[]
+  warnings?: ValidationWarning[],
+  previousStops?: RouteStop[]
 ): Promise<RouteValidationResult<RouteStop> | null> {
   try {
-    const location = await getSearchCenter(stop, userLocation);
+    const location = await getSearchCenter(stop, userLocation, previousStops);
 
     console.log(`🔍 [Strategy 0] Searching Google Places with original prompt: "${originalPrompt}"`);
 
@@ -363,10 +372,11 @@ async function tryGooglePlaces(
   expandedRadius?: number,
   regionDistanceKm?: number,
   warnings?: ValidationWarning[],
-  isLastResort?: boolean  // NEW parameter for flexible validation
+  isLastResort?: boolean,
+  previousStops?: RouteStop[]
 ): Promise<RouteValidationResult<RouteStop> | null> {
   try {
-    const location = await getSearchCenter(stop, userLocation);
+    const location = await getSearchCenter(stop, userLocation, previousStops);
     const searchQuery = buildSearchQuery(stop);
 
     // Strategy 1: Search by name and description
@@ -428,7 +438,7 @@ async function tryGooglePlaces(
       return null;
     }
 
-    const bestVenue = selectBestNormalizedVenue(normalizedVenues, stop);
+    const bestVenue = selectBestNormalizedVenue(normalizedVenues, stop, previousStops);
 
     // Validate distance from user location (enforce radius limit)
     if (userLocation && regionDistanceKm) {
@@ -524,10 +534,11 @@ async function tryFoursquare(
   expandedRadius?: number,
   regionDistanceKm?: number,
   warnings?: ValidationWarning[],
-  isLastResort?: boolean  // NEW parameter for flexible validation
+  isLastResort?: boolean,
+  previousStops?: RouteStop[]
 ): Promise<RouteValidationResult<RouteStop> | null> {
   try {
-    const location = await getSearchCenter(stop, userLocation);
+    const location = await getSearchCenter(stop, userLocation, previousStops);
     const searchQuery = buildSearchQuery(stop);
 
     // Strategy 1: Search by name and description
@@ -590,7 +601,7 @@ async function tryFoursquare(
       return null;
     }
 
-    const bestVenue = selectBestNormalizedVenue(normalizedVenues, stop);
+    const bestVenue = selectBestNormalizedVenue(normalizedVenues, stop, previousStops);
 
     // Validate distance from user location (enforce radius limit)
     if (userLocation && regionDistanceKm) {
@@ -683,12 +694,12 @@ async function tryFoursquare(
 /**
  * Select best venue from normalized results with controlled randomness
  */
-function selectBestNormalizedVenue(venues: NormalizedVenue[], stop: Partial<RouteStop>): NormalizedVenue {
+function selectBestNormalizedVenue(venues: NormalizedVenue[], stop: Partial<RouteStop>, previousStops?: RouteStop[]): NormalizedVenue {
   // Score each venue
   const scoredVenues = venues.map(venue => ({
     venue,
-    score: calculateNormalizedVenueScore(venue, stop),
-    randomizedScore: calculateNormalizedVenueScore(venue, stop) + (Math.random() * 20 * VALIDATION_CONFIG.RANDOMNESS_FACTOR),
+    score: calculateNormalizedVenueScore(venue, stop, previousStops),
+    randomizedScore: calculateNormalizedVenueScore(venue, stop, previousStops) + (Math.random() * 20 * VALIDATION_CONFIG.RANDOMNESS_FACTOR),
   }));
 
   // Filter out venues that are too far or very low rated
@@ -724,7 +735,7 @@ function selectBestNormalizedVenue(venues: NormalizedVenue[], stop: Partial<Rout
 /**
  * Calculate venue suitability score for normalized venues
  */
-function calculateNormalizedVenueScore(venue: NormalizedVenue, stop: Partial<RouteStop>): number {
+function calculateNormalizedVenueScore(venue: NormalizedVenue, stop: Partial<RouteStop>, previousStops?: RouteStop[]): number {
   let score = 0;
 
   // Name similarity (0-30 points)
@@ -768,6 +779,23 @@ function calculateNormalizedVenueScore(venue: NormalizedVenue, stop: Partial<Rou
     score += 5;
   }
 
+  // Proximity to previously validated stops (0-25 points)
+  if (previousStops && previousStops.length > 0) {
+    const distances = previousStops.map(ps =>
+      calculateDistanceKm(venue.latitude, venue.longitude, ps.latitude, ps.longitude)
+    );
+    const avgDistKm = distances.reduce((sum, d) => sum + d, 0) / distances.length;
+    const minDistKm = Math.min(...distances);
+
+    // Proximity score: full points at 0km, zero at 30km
+    const proximityScore = Math.max(0, 1 - avgDistKm / 30) * 20;
+
+    // Nearest stop bonus
+    const nearestBonus = minDistKm < 2 ? 5 : minDistKm < 5 ? 3 : 0;
+
+    score += proximityScore + nearestBonus;
+  }
+
   return score;
 }
 
@@ -776,22 +804,35 @@ function calculateNormalizedVenueScore(venue: NormalizedVenue, stop: Partial<Rou
  */
 async function getSearchCenter(
   stop: Partial<RouteStop>,
-  userLocation?: UserLocation
+  userLocation?: UserLocation,
+  previousStops?: RouteStop[]
 ): Promise<{ latitude: number; longitude: number }> {
-  // Prefer user location if available
+  // Start with user location or geocoded address
+  let baseLocation: { latitude: number; longitude: number };
+
   if (userLocation) {
-    return userLocation;
+    baseLocation = userLocation;
+  } else {
+    try {
+      const result = await geocodeAddressWithScore(stop.address!);
+      baseLocation = { latitude: result.lat, longitude: result.lon };
+    } catch (error) {
+      console.warn(`Could not geocode ${stop.address}, using fallback location`);
+      baseLocation = { latitude: 39.8283, longitude: -98.5795 };
+    }
   }
 
-  // Fall back to geocoding the address
-  try {
-    const result = await geocodeAddressWithScore(stop.address!);
-    return { latitude: result.lat, longitude: result.lon };
-  } catch (error) {
-    console.warn(`Could not geocode ${stop.address}, using fallback location`);
-    // Default to center of US if no user location
-    return { latitude: 39.8283, longitude: -98.5795 };
+  // If we have previous stops, shift the search center toward their centroid
+  if (previousStops && previousStops.length > 0) {
+    const allPoints = [baseLocation, ...previousStops.map(s => ({ latitude: s.latitude, longitude: s.longitude }))];
+    const centroid = {
+      latitude: allPoints.reduce((sum, p) => sum + p.latitude, 0) / allPoints.length,
+      longitude: allPoints.reduce((sum, p) => sum + p.longitude, 0) / allPoints.length,
+    };
+    return centroid;
   }
+
+  return baseLocation;
 }
 
 /**

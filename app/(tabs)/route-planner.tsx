@@ -12,8 +12,7 @@ import { LocationSelector } from '@/components/route-planner/location-selector';
 import { RadiusSelector } from '@/components/route-planner/radius-selector';
 import { VenueCountSelector } from '@/components/route-planner/venue-count-selector';
 import { SavedRoutesList } from '@/components/route-planner/saved-routes-list';
-import { AddStopInput } from '@/components/route-planner/add-stop-input';
-import { StopSuggestionModal } from '@/components/route-planner/stop-suggestion-modal';
+import { AddStopModal } from '@/components/route-planner/add-stop-modal';
 import { RouteBuilderModal } from '@/components/route-planner/route-builder-modal';
 import { PlaceSearchInput } from '@/components/route-planner/place-search-input';
 import { useRouteGeneration } from '@/hooks/use-route-generation';
@@ -80,11 +79,10 @@ export default function RoutePlannerScreen() {
   const [showRadiusSelector, setShowRadiusSelector] = useState(false);
   const [showVenueCountSelector, setShowVenueCountSelector] = useState(false);
   const [showAddStopSuggestion, setShowAddStopSuggestion] = useState(false);
-  const [showAddStopInput, setShowAddStopInput] = useState(false);
-  const [showStopSuggestions, setShowStopSuggestions] = useState(false);
-  const [addStopDescription, setAddStopDescription] = useState('');
+  const [showAddStopModal, setShowAddStopModal] = useState(false);
   const [pinnedStops, setPinnedStops] = useState<RouteStop[]>([]);
   const [showPlaceSearch, setShowPlaceSearch] = useState(false);
+  const lastPromptRef = useRef<string>('');
   const pinnedStopsRef = useRef<RouteStop[]>([]);
   pinnedStopsRef.current = pinnedStops;
   const colorScheme = useColorScheme();
@@ -131,6 +129,7 @@ export default function RoutePlannerScreen() {
   };
 
   const handleGenerate = async (prompt: string) => {
+    lastPromptRef.current = prompt;
     let userLoc = preferredLocation
       ? { latitude: preferredLocation.latitude, longitude: preferredLocation.longitude }
       : deviceLocation;
@@ -149,7 +148,7 @@ export default function RoutePlannerScreen() {
         locationContext,
         maxDistanceMiles: radius?.radiusMiles || 25,
         venueCount: currentVenueCount,
-      });
+      }, prompt);
       setPinnedStops([]);
       return;
     }
@@ -186,43 +185,20 @@ export default function RoutePlannerScreen() {
     ]);
   };
 
-  const handleOpenAddStopInput = useCallback(() => {
-    setShowAddStopInput(true);
-  }, []);
-
-  const handleAddStopSubmit = useCallback((description: string) => {
-    setAddStopDescription(description);
-    setShowAddStopInput(false);
-    setShowStopSuggestions(true);
+  const handleOpenAddStop = useCallback(() => {
+    setShowAddStopModal(true);
     setShowAddStopSuggestion(false);
   }, []);
 
-  const handleSelectSuggestedStop = useCallback((stop: RouteStop) => {
+  const handleAddStopSelect = useCallback((stop: RouteStop) => {
     addSpecificStop(stop);
-    setShowStopSuggestions(false);
-    setAddStopDescription('');
-  }, [addSpecificStop]);
-
-  const handleSuggestionSearchAgain = useCallback(() => {
-    setShowStopSuggestions(false);
-    setShowAddStopInput(true);
-  }, []);
-
-  const handleDismissSuggestions = useCallback(() => {
-    setShowStopSuggestions(false);
-    setAddStopDescription('');
-  }, []);
-
-  const handleSelectPlaceForAddStop = useCallback((place: GooglePlaceNew) => {
-    setShowAddStopInput(false);
-    setShowAddStopSuggestion(false);
-    const newStop = googlePlaceToRouteStop(place, 0);
-    addSpecificStop(newStop);
+    setShowAddStopModal(false);
   }, [addSpecificStop]);
 
   const handlePinPlace = useCallback((place: GooglePlaceNew) => {
     if (pinnedStops.some(s => s.venueDetails?.placeId === place.id)) return;
     const newStop = googlePlaceToRouteStop(place, pinnedStops.length + 1);
+    if (!newStop) return;
     setPinnedStops(prev => [...prev, newStop]);
     setShowPlaceSearch(false);
   }, [pinnedStops]);
@@ -242,7 +218,7 @@ export default function RoutePlannerScreen() {
       locationContext: preferredLocation ? getLocationContext() : undefined,
       maxDistanceMiles: radius?.radiusMiles || 25,
       venueCount: allStops.length,
-    });
+    }, lastPromptRef.current || undefined);
     setPinnedStops([]);
   }, [pinnedStops, preferredLocation, deviceLocation, createRouteFromStops, getLocationContext, radius]);
 
@@ -439,7 +415,7 @@ export default function RoutePlannerScreen() {
           <View style={styles.mapContainer}>
             <RouteMap
               route={route}
-              onOpenAddStop={canAddStop ? handleOpenAddStopInput : undefined}
+              onOpenAddStop={canAddStop ? handleOpenAddStop : undefined}
               onRemoveStop={removeStop}
               isRemovingStop={isRemovingStop}
               isAddingStop={false}
@@ -451,7 +427,7 @@ export default function RoutePlannerScreen() {
             <View style={styles.suggestionBanner}>
               <TouchableOpacity
                 style={styles.suggestionContent}
-                onPress={handleOpenAddStopInput}
+                onPress={handleOpenAddStop}
                 activeOpacity={0.8}
               >
                 <IconSymbol name="sparkles" size={16} color={tailwind.blue500} />
@@ -474,24 +450,11 @@ export default function RoutePlannerScreen() {
             </ScrollView>
           </View>
 
-          <AddStopInput
-            visible={showAddStopInput}
-            onClose={() => setShowAddStopInput(false)}
-            onSubmit={handleAddStopSubmit}
-            onSelectPlace={handleSelectPlaceForAddStop}
+          <AddStopModal
+            visible={showAddStopModal}
+            route={route}
             searchLocation={
-              preferredLocation
-                ? { latitude: preferredLocation.latitude, longitude: preferredLocation.longitude }
-                : deviceLocation
-            }
-            radiusMeters={(radius?.radiusMiles || 25) * 1609}
-          />
-
-          <StopSuggestionModal
-            visible={showStopSuggestions}
-            description={addStopDescription}
-            searchLocation={
-              route
+              route && route.stops.length > 0
                 ? {
                     latitude: route.stops.reduce((s, st) => s + st.latitude, 0) / route.stops.length,
                     longitude: route.stops.reduce((s, st) => s + st.longitude, 0) / route.stops.length,
@@ -501,9 +464,8 @@ export default function RoutePlannerScreen() {
                   : deviceLocation
             }
             radiusMeters={(radius?.radiusMiles || 25) * 1609}
-            onSelectStop={handleSelectSuggestedStop}
-            onDismiss={handleDismissSuggestions}
-            onSearchAgain={handleSuggestionSearchAgain}
+            onSelectStop={handleAddStopSelect}
+            onDismiss={() => setShowAddStopModal(false)}
           />
         </View>
       )}

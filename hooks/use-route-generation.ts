@@ -6,6 +6,7 @@ import {
 } from '@/lib/route-generator';
 import { Route, RouteStop, RoutePlan } from '@/types/route';
 import { ValidationWarning } from '@/types/validation';
+import { findOptimalInsertionPosition } from '@/lib/geo-utils';
 import uuid from 'react-native-uuid';
 
 type GenerationState = 'idle' | 'loading' | 'planning' | 'building' | 'success' | 'error';
@@ -105,12 +106,23 @@ export function useRouteGeneration() {
   const addSpecificStop = useCallback((newStop: RouteStop) => {
     if (!route) return;
     if (route.stops.length >= MAX_VENUE_COUNT) return;
-    const maxOrder = Math.max(0, ...route.stops.map(s => s.order));
-    const stopWithOrder = { ...newStop, order: maxOrder + 1 };
-    setRoute({ ...route, stops: [...route.stops, stopWithOrder] });
+    if (newStop.latitude === 0 && newStop.longitude === 0) return;
+
+    const sorted = [...route.stops].sort((a, b) => a.order - b.order);
+    const existingCoords = sorted.map(s => ({ latitude: s.latitude, longitude: s.longitude }));
+    const optimalOrder = findOptimalInsertionPosition(existingCoords, {
+      latitude: newStop.latitude,
+      longitude: newStop.longitude,
+    });
+
+    const shiftedStops = sorted.map(s =>
+      s.order >= optimalOrder ? { ...s, order: s.order + 1 } : s
+    );
+    const stopWithOrder = { ...newStop, order: optimalOrder };
+    setRoute({ ...route, stops: [...shiftedStops, stopWithOrder] });
   }, [route]);
 
-  const createRouteFromStops = useCallback((stops: RouteStop[], title: string, options?: RouteGenerationOptions) => {
+  const createRouteFromStops = useCallback((stops: RouteStop[], title: string, options?: RouteGenerationOptions, originalPrompt?: string) => {
     setState('success');
     setError(null);
     setWarnings([]);
@@ -121,6 +133,7 @@ export function useRouteGeneration() {
       stops: orderedStops,
       createdAt: new Date().toISOString(),
       generationOptions: options,
+      originalPrompt,
     });
   }, []);
 

@@ -30,10 +30,18 @@ interface SuggestionCardProps {
   place: GooglePlaceNew;
   onSelect: (place: GooglePlaceNew) => void;
   selectLabel?: string;
+  nearestStopDistance?: number; // miles
+  nearestStopName?: string;
 }
 
-export function SuggestionCard({ place, onSelect, selectLabel }: SuggestionCardProps) {
+function estimateTravelMinutes(distanceMiles: number): number {
+  if (distanceMiles < 0.5) return Math.max(1, Math.ceil(distanceMiles * 15)); // ~4 mph walking
+  return Math.max(1, Math.ceil(distanceMiles * 2)); // ~30 mph city driving
+}
+
+export function SuggestionCard({ place, onSelect, selectLabel, nearestStopDistance }: SuggestionCardProps) {
   const stop = googlePlaceToRouteStop(place, 0);
+  if (!stop) return null;
   const iconConfig = STOP_ICON_MAPPING[stop.type];
   const isOpen = place.currentOpeningHours?.openNow ?? place.regularOpeningHours?.openNow;
 
@@ -85,10 +93,21 @@ export function SuggestionCard({ place, onSelect, selectLabel }: SuggestionCardP
         )}
 
         <View style={cardStyles.durationBadge}>
-          <IconSymbol name="clock" size={12} color={tailwind.gray500} />
-          <ThemedText style={cardStyles.durationText}>
-            {stop.duration} min
-          </ThemedText>
+          {nearestStopDistance != null ? (
+            <>
+              <IconSymbol name="car" size={12} color={tailwind.gray500} />
+              <ThemedText style={cardStyles.durationText}>
+                {estimateTravelMinutes(nearestStopDistance)} min away
+              </ThemedText>
+            </>
+          ) : (
+            <>
+              <IconSymbol name="clock" size={12} color={tailwind.gray500} />
+              <ThemedText style={cardStyles.durationText}>
+                ~{stop.duration} min visit
+              </ThemedText>
+            </>
+          )}
         </View>
       </View>
 

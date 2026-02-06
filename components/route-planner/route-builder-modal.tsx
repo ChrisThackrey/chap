@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Modal,
   View,
@@ -10,7 +10,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { searchNearbyPlaces, googlePlaceToRouteStop, GooglePlaceNew } from '@/lib/google-places';
+import { searchNearbyPlaces, googlePlaceToRouteStop, GooglePlaceNew, calculateDistance } from '@/lib/google-places';
 import { STOP_ICON_MAPPING } from '@/constants/stop-icons';
 import { SuggestionCard } from './suggestion-card';
 import { RoutePlan, RouteStop } from '@/types/route';
@@ -79,9 +79,28 @@ export function RouteBuilderModal({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]); // deliberately minimal deps — run once when modal opens
 
+  // Compute dynamic search center: midpoint between last selected stop and user location
+  const dynamicSearchCenter = useMemo(() => {
+    if (!searchLocation) return null;
+    const selectedValues = Array.from(selectedStops.values());
+    if (selectedValues.length === 0) return searchLocation;
+    const lastStop = selectedValues[selectedValues.length - 1];
+    return {
+      latitude: (lastStop.latitude + searchLocation.latitude) / 2,
+      longitude: (lastStop.longitude + searchLocation.longitude) / 2,
+    };
+  }, [searchLocation, selectedStops]);
+
+  // Progressive radius: tighter for later steps
+  const dynamicRadius = useMemo(() => {
+    const stepNum = currentStep + 1;
+    const scale = stepNum === 1 ? 1.0 : stepNum === 2 ? 0.8 : stepNum === 3 ? 0.65 : 0.5;
+    return radiusMeters * scale;
+  }, [currentStep, radiusMeters]);
+
   // Fetch places for current step
   useEffect(() => {
-    if (!visible || isConfirmation || !searchLocation) return;
+    if (!visible || isConfirmation || !dynamicSearchCenter) return;
     if (stepPlaces.has(currentStep)) return; // already cached
 
     const planStop = plan.stops[currentStep];
@@ -94,14 +113,43 @@ export function RouteBuilderModal({
       try {
         const results = await searchNearbyPlaces(
           planStop.searchQuery,
-          searchLocation.latitude,
-          searchLocation.longitude,
-          radiusMeters,
+          dynamicSearchCenter.latitude,
+          dynamicSearchCenter.longitude,
+          dynamicRadius,
         );
+
+        // Rank-blended sort: 60% relevance (Google's order) + 40% distance rank
+        const candidates = results.slice(0, 10);
+        const withRelevanceRank = candidates.map((r, i) => ({ place: r, relevanceRank: i }));
+
+        // Distance rank: sort by distance to search center, assign 0..N ranks
+        const byDistance = [...withRelevanceRank].sort((a, b) => {
+          const distA = a.place.location ? calculateDistance(
+            dynamicSearchCenter.latitude, dynamicSearchCenter.longitude,
+            a.place.location.latitude, a.place.location.longitude
+          ) : Infinity;
+          const distB = b.place.location ? calculateDistance(
+            dynamicSearchCenter.latitude, dynamicSearchCenter.longitude,
+            b.place.location.latitude, b.place.location.longitude
+          ) : Infinity;
+          return distA - distB;
+        });
+        const distanceRankMap = new Map<string, number>();
+        byDistance.forEach((item, i) => distanceRankMap.set(item.place.id, i));
+
+        // Blend ranks (same 0–N scale, so neither dominates)
+        const sorted = withRelevanceRank
+          .sort((a, b) => {
+            const scoreA = a.relevanceRank * 0.6 + (distanceRankMap.get(a.place.id) ?? candidates.length) * 0.4;
+            const scoreB = b.relevanceRank * 0.6 + (distanceRankMap.get(b.place.id) ?? candidates.length) * 0.4;
+            return scoreA - scoreB;
+          })
+          .map(item => item.place);
+
         if (!cancelled) {
           setStepPlaces((prev) => {
             const next = new Map(prev);
-            next.set(currentStep, results.slice(0, 5));
+            next.set(currentStep, sorted.slice(0, 5));
             return next;
           });
         }
@@ -120,13 +168,22 @@ export function RouteBuilderModal({
     })();
 
     return () => { cancelled = true; };
-  }, [visible, currentStep, isConfirmation, searchLocation, radiusMeters, plan.stops, stepPlaces]);
+  }, [visible, currentStep, isConfirmation, dynamicSearchCenter, dynamicRadius, plan.stops, stepPlaces]);
 
   const handleSelectPlace = useCallback((place: GooglePlaceNew) => {
     const stop = googlePlaceToRouteStop(place, currentStep + 1);
+    if (!stop) return;
     setSelectedStops((prev) => {
       const next = new Map(prev);
       next.set(currentStep, stop);
+      return next;
+    });
+    // Clear cached results for all subsequent steps (search center has shifted)
+    setStepPlaces((prev) => {
+      const next = new Map(prev);
+      for (let i = currentStep + 1; i < totalSteps; i++) {
+        next.delete(i);
+      }
       return next;
     });
     // Auto-advance
@@ -153,13 +210,30 @@ export function RouteBuilderModal({
 
   const handleBack = useCallback(() => {
     if (currentStep > 0) {
+      // Clear cached results for current step and all subsequent steps
+      // (going back means the user might change selection, shifting the centroid)
+      setStepPlaces((prev) => {
+        const next = new Map(prev);
+        for (let i = currentStep; i < totalSteps; i++) {
+          next.delete(i);
+        }
+        return next;
+      });
       setCurrentStep(currentStep - 1);
     }
-  }, [currentStep]);
+  }, [currentStep, totalSteps]);
 
   const handleChangeStep = useCallback((step: number) => {
+    // Clear cached results from the target step onward (centroid may differ)
+    setStepPlaces((prev) => {
+      const next = new Map(prev);
+      for (let i = step; i < totalSteps; i++) {
+        next.delete(i);
+      }
+      return next;
+    });
     setCurrentStep(step);
-  }, []);
+  }, [totalSteps]);
 
   const handleConfirm = useCallback(() => {
     const stops = Array.from(selectedStops.values());
@@ -276,14 +350,33 @@ export function RouteBuilderModal({
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
               >
-                {currentPlaces.map((place) => (
-                  <SuggestionCard
-                    key={place.id}
-                    place={place}
-                    onSelect={handleSelectPlace}
-                    selectLabel="Tap to select"
-                  />
-                ))}
+                {currentPlaces.map((place) => {
+                  const selectedValues = Array.from(selectedStops.values());
+                  let nearestDist: number | undefined;
+                  let nearestName: string | undefined;
+                  if (place.location && selectedValues.length > 0) {
+                    for (const s of selectedValues) {
+                      const d = calculateDistance(
+                        place.location.latitude, place.location.longitude,
+                        s.latitude, s.longitude
+                      ) * 0.621371; // km to miles
+                      if (nearestDist === undefined || d < nearestDist) {
+                        nearestDist = d;
+                        nearestName = s.name;
+                      }
+                    }
+                  }
+                  return (
+                    <SuggestionCard
+                      key={place.id}
+                      place={place}
+                      onSelect={handleSelectPlace}
+                      selectLabel="Tap to select"
+                      nearestStopDistance={nearestDist}
+                      nearestStopName={nearestName}
+                    />
+                  );
+                })}
               </ScrollView>
             )}
 

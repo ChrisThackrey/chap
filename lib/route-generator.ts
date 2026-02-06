@@ -355,21 +355,20 @@ export async function generateRoute(
   // Build geographic diversity instructions based on radius
   const getGeographicGuidance = (radius: number): string => {
     if (radius <= 10) {
-      return `GEOGRAPHIC SPREAD (${radius}-mile radius):
-- Select venues from at least 2-3 DIFFERENT neighborhoods
-- Include a mix: some within 2-3 miles, others 5-${radius} miles away
-- Avoid clustering all venues in the same downtown area`;
+      return `PROXIMITY (${radius}-mile radius):
+- Keep ALL venues close together — same neighborhood or adjacent neighborhoods
+- Minimize driving/walking between stops
+- A compact, walkable route is ideal`;
     } else if (radius <= 25) {
-      return `GEOGRAPHIC SPREAD (${radius}-mile radius):
-- Select venues from at least 3-4 DIFFERENT areas/neighborhoods
-- Include diverse distances: 1-2 nearby (under 5 miles), 1-2 medium (5-15 miles), 1 farther (15-${radius} miles)
-- Consider venues in suburbs or neighboring areas, not just downtown`;
+      return `PROXIMITY (${radius}-mile radius):
+- Cluster venues in a compact area — minimize total travel time between stops
+- Short drives between stops are preferred over geographic spread
+- Each stop should flow naturally to the next without backtracking`;
     } else {
-      return `GEOGRAPHIC SPREAD (${radius}-mile radius):
-- This is a ROAD TRIP route - select venues across MULTIPLE cities/towns
-- Include at least 3-4 different cities/areas within the ${radius}-mile radius
-- Create a journey that makes geographic sense for driving
-- Consider attractions along highways and in different communities`;
+      return `PROXIMITY (${radius}-mile radius — road trip):
+- Plan stops along a LOGICAL driving route — avoid backtracking
+- Each stop should be roughly on the way to the next
+- This is a road trip, so linear progress is more important than clustering`;
     }
   };
 
@@ -451,7 +450,7 @@ CRITICAL RULES:
 1. ONLY suggest REAL venues that actually exist - names must be searchable on Google Maps
 2. Each venue MUST have a real street address (number, street, city, state, zip)
 3. DIRECTLY address what the user asked for - if they want tacos, suggest REAL taco restaurants; if they want craft beer, suggest REAL craft breweries/taprooms
-4. GEOGRAPHIC DIVERSITY IS MANDATORY - venues must be spread across different neighborhoods/areas
+4. PROXIMITY IS IMPORTANT - venues should be close together for a practical outing. Minimize total driving/walking time between stops.
 ${diversityRule}
 6. Mix popularity levels - include some well-known spots AND some hidden gems/local favorites
 
@@ -468,8 +467,8 @@ Each stop must include:
 VENUE SELECTION STRATEGY:
 - Prioritize venues that SPECIFICALLY match the user's request over generally popular places
 - Include at least one "hidden gem" or "local favorite" that tourists might not know
-- Spread across different parts of the city/region (check approximateDistanceFromCenter values)
-- Create a logical route that flows geographically
+- Keep stops geographically close when possible — a compact route is better than a spread-out one
+- Create a route where each stop flows naturally to the next without backtracking
 - Don't default to the same well-known spots every time - be creative and specific to the request`;
 
   // Helper: run LLM generation with fallback chain
@@ -670,7 +669,8 @@ For each stop, return:
 - description: A short sentence explaining why this stop fits the outing (shown to the user).
 - order: Sequential number starting at 1.
 
-The search queries should be specific enough to return relevant Google Places results. Include location context in each query.`;
+The search queries should be specific enough to return relevant Google Places results. Include location context in each query.
+Search queries should target the SAME general area/neighborhood for a practical, compact outing. Avoid spreading stops across distant parts of the city.`;
 
   const callPlan = async (model: string) => {
     const response = await openai.chat.completions.create({

@@ -494,7 +494,11 @@ export function inferStopTypeFromGoogleTypes(googleTypes: string[]): StopType {
 /**
  * Convert a Google Place result directly into a RouteStop
  */
-export function googlePlaceToRouteStop(place: GooglePlaceNew, order: number): RouteStop {
+export function googlePlaceToRouteStop(place: GooglePlaceNew, order: number): RouteStop | null {
+  const lat = place.location?.latitude ?? 0;
+  const lon = place.location?.longitude ?? 0;
+  if (lat === 0 && lon === 0) return null;
+
   const stopType = inferStopTypeFromGoogleTypes(place.types || []);
   const durations: Record<StopType, number> = {
     restaurant: 90, cafe: 45, bar: 60, park: 45,
@@ -506,8 +510,8 @@ export function googlePlaceToRouteStop(place: GooglePlaceNew, order: number): Ro
     type: stopType,
     description: place.editorialSummary?.text || `A ${stopType} in the area`,
     address: place.formattedAddress || '',
-    latitude: place.location?.latitude ?? 0,
-    longitude: place.location?.longitude ?? 0,
+    latitude: lat,
+    longitude: lon,
     duration: durations[stopType] || 60,
     order,
     venueDetails: mapGooglePlaceToVenueDetails(place),
