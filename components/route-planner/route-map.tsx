@@ -5,73 +5,52 @@ import Constants from 'expo-constants';
 import { ThemedText } from '@/components/themed-text';
 import { StopMarker } from './stop-marker';
 import { StopDetailModal } from './stop-detail-modal';
-import { AddStopModal } from './add-stop-modal';
 import { NavigationAppSelectorModal, NavigationApp } from './navigation-app-selector-modal';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Route, RouteStop, RouteSegment } from '@/types/route';
-import { RouteCoordinate } from '@/lib/google-directions';
+import { Route, RouteStop, RouteSegment, TravelMode } from '@/types/route';
+import { RouteCoordinate, fetchCompleteRouteWithSegments } from '@/lib/google-directions';
 import { MapColors, tailwind } from '@/constants/theme';
-import { validateRoute, snapshotRouteState } from '@/lib/debug-utils';
 
 // Check if running in Expo Go (which doesn't support Google Maps on iOS)
 const isExpoGo = Constants.appOwnership === 'expo';
 
 // Determine map provider - use Google on development builds, default (Apple) in Expo Go
-// Force Google Maps for development builds
 const MAP_PROVIDER = Platform.OS === 'ios' && isExpoGo ? PROVIDER_DEFAULT : PROVIDER_GOOGLE;
 
 // Debug: Temporarily disable custom style to test if Google Maps works without it
-const USE_CUSTOM_STYLE = false; // Set to true once Google Maps is confirmed working
+const USE_CUSTOM_STYLE = false;
 
-// Log map configuration on module load
-console.log('🗺️ Map Configuration:');
-console.log(`   Platform: ${Platform.OS}`);
-console.log(`   Is Expo Go: ${isExpoGo}`);
-console.log(`   Map Provider: ${MAP_PROVIDER === PROVIDER_GOOGLE ? 'Google Maps' : 'Default (Apple Maps)'}`);
-console.log(`   Google Maps API Key configured: ${!!Constants.expoConfig?.ios?.config?.googleMapsApiKey}`);
+console.log(`[RouteMap] Provider: ${MAP_PROVIDER === PROVIDER_GOOGLE ? 'Google' : 'Apple'}, ExpoGo: ${isExpoGo}`);
 
 // Pastel map style for Google Maps - tailwind-inspired soft colors
 const PASTEL_MAP_STYLE = [
-  // Base geometry - soft gray from tailwind gray-50
   { elementType: 'geometry', stylers: [{ color: '#F9FAFB' }] },
-  // Labels - gray-600 for readability
   { elementType: 'labels.text.fill', stylers: [{ color: '#4B5563' }] },
   { elementType: 'labels.text.stroke', stylers: [{ color: '#FFFFFF' }] },
-  // Administrative boundaries - gray-300
   { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#D1D5DB' }] },
   { featureType: 'administrative.land_parcel', elementType: 'labels.text.fill', stylers: [{ color: '#9CA3AF' }] },
-  // Roads - white with subtle gray stroke
   { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#FFFFFF' }] },
   { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#E5E7EB' }] },
   { featureType: 'road.arterial', elementType: 'labels.text.fill', stylers: [{ color: '#6B7280' }] },
-  // Highways - soft amber/yellow tint (amber-100)
   { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#FEF3C7' }] },
   { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#FDE68A' }] },
   { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#4B5563' }] },
   { featureType: 'road.local', elementType: 'labels.text.fill', stylers: [{ color: '#9CA3AF' }] },
-  // Water - soft blue (blue-100)
   { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#DBEAFE' }] },
   { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#60A5FA' }] },
-  // Parks - soft emerald/green (emerald-100)
   { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#D1FAE5' }] },
   { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#059669' }] },
-  // Landscape - subtle warm tint
   { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#F3F4F6' }] },
   { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#ECFDF5' }] },
-  // Hide POI labels for cleaner look
   { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
   { featureType: 'poi.business', stylers: [{ visibility: 'off' }] },
-  // Hide transit for cleaner look
   { featureType: 'transit', elementType: 'labels', stylers: [{ visibility: 'off' }] },
   { featureType: 'transit.station', stylers: [{ visibility: 'off' }] },
 ];
 
 // Threshold for considering stops as overlapping (in degrees)
-// ~500m threshold to catch nearby markers that might visually overlap
 const OVERLAP_THRESHOLD = 0.005;
-// Base offset distance for overlapping markers (in degrees, ~300m)
 const OFFSET_DISTANCE = 0.003;
-// Minimum visual separation distance (prevents markers from being too close)
 const MIN_SEPARATION = 0.002;
 
 interface StopWithOffset {
@@ -79,17 +58,15 @@ interface StopWithOffset {
   displayLat: number;
   displayLng: number;
   isOffset: boolean;
-  overlapGroup: number; // Group ID for stops that overlap with each other
+  overlapGroup: number;
 }
 
 /**
  * Calculate display positions for stops, offsetting overlapping ones
- * Uses a force-directed approach to spread out clustered markers
  */
 function calculateStopPositions(stops: RouteStop[]): StopWithOffset[] {
   if (stops.length === 0) return [];
 
-  // First pass: identify overlap groups
   const overlapGroups: number[][] = [];
   const stopToGroup: Map<number, number> = new Map();
 
@@ -97,7 +74,6 @@ function calculateStopPositions(stops: RouteStop[]): StopWithOffset[] {
     const stop = stops[i];
     let foundGroup = -1;
 
-    // Check if this stop overlaps with any existing group
     for (let j = 0; j < i; j++) {
       const otherStop = stops[j];
       const latDiff = Math.abs(stop.latitude - otherStop.latitude);
@@ -116,7 +92,6 @@ function calculateStopPositions(stops: RouteStop[]): StopWithOffset[] {
       overlapGroups[foundGroup].push(i);
       stopToGroup.set(i, foundGroup);
     } else {
-      // Check if any previous stop should be in a group with this one
       let newGroupMembers = [i];
       for (let j = 0; j < i; j++) {
         if (stopToGroup.has(j)) continue;
@@ -138,7 +113,6 @@ function calculateStopPositions(stops: RouteStop[]): StopWithOffset[] {
     }
   }
 
-  // Second pass: calculate display positions
   const result: StopWithOffset[] = [];
 
   for (let i = 0; i < stops.length; i++) {
@@ -146,7 +120,6 @@ function calculateStopPositions(stops: RouteStop[]): StopWithOffset[] {
     const groupId = stopToGroup.get(i);
 
     if (groupId === undefined) {
-      // No overlap, use original position
       result.push({
         stop,
         displayLat: stop.latitude,
@@ -155,12 +128,10 @@ function calculateStopPositions(stops: RouteStop[]): StopWithOffset[] {
         overlapGroup: -1,
       });
     } else {
-      // Part of an overlap group - spread in a circle around the center
       const group = overlapGroups[groupId];
       const indexInGroup = group.indexOf(i);
       const groupSize = group.length;
 
-      // Calculate center of the group
       let centerLat = 0, centerLng = 0;
       group.forEach(idx => {
         centerLat += stops[idx].latitude;
@@ -169,10 +140,7 @@ function calculateStopPositions(stops: RouteStop[]): StopWithOffset[] {
       centerLat /= groupSize;
       centerLng /= groupSize;
 
-      // Calculate offset angle and distance based on position in group
-      // Spread markers evenly in a circle around the center
       const angle = (indexInGroup / groupSize) * 2 * Math.PI;
-      // Increase offset distance for larger groups
       const offsetMultiplier = 1 + (groupSize - 2) * 0.3;
       const offsetDist = OFFSET_DISTANCE * offsetMultiplier;
 
@@ -186,19 +154,16 @@ function calculateStopPositions(stops: RouteStop[]): StopWithOffset[] {
         isOffset: true,
         overlapGroup: groupId,
       });
-
-      console.log(`📍 Offset marker "${stop.name}" (group ${groupId}, ${indexInGroup + 1}/${groupSize})`);
     }
   }
 
-  // Third pass: ensure minimum separation between all markers
+  // Ensure minimum separation between all markers
   for (let i = 0; i < result.length; i++) {
     for (let j = i + 1; j < result.length; j++) {
       const latDiff = Math.abs(result[i].displayLat - result[j].displayLat);
       const lngDiff = Math.abs(result[i].displayLng - result[j].displayLng);
 
       if (latDiff < MIN_SEPARATION && lngDiff < MIN_SEPARATION) {
-        // Push them apart
         const pushAngle = Math.atan2(
           result[j].displayLat - result[i].displayLat,
           result[j].displayLng - result[i].displayLng
@@ -217,42 +182,21 @@ function calculateStopPositions(stops: RouteStop[]): StopWithOffset[] {
 
 interface RouteMapProps {
   route: Route;
-  optimizedSegments?: RouteSegment[];
-  isOptimizing?: boolean;
-  onAddStop?: (prompt: string) => Promise<{ success: boolean }>;
-  isAddingStop?: boolean;
-  addStopError?: string | null;
-  onClearAddStopError?: () => void;
+  onOpenAddStop?: () => void;
   onRemoveStop?: (stopId: string) => Promise<void>;
   isRemovingStop?: boolean;
+  isAddingStop?: boolean;
 }
 
 export function RouteMap({
   route,
-  optimizedSegments = [],
-  isOptimizing = false,
-  onAddStop,
-  isAddingStop = false,
-  addStopError = null,
-  onClearAddStopError,
+  onOpenAddStop,
   onRemoveStop,
   isRemovingStop = false,
+  isAddingStop = false,
 }: RouteMapProps) {
-  // Debug: Log props on mount and updates
-  useEffect(() => {
-    console.log('🔍 [RouteMap] Component props updated');
-    console.log('   - onAddStop provided:', !!onAddStop);
-    console.log('   - isAddingStop:', isAddingStop);
-    console.log('   - addStopError:', addStopError);
-    console.log('   - Route stops:', route.stops.length);
-
-    // Validate and snapshot route whenever it changes
-    snapshotRouteState(route, 'RouteMap:PropsUpdate');
-    validateRoute(route, 'RouteMap:PropsUpdate');
-  }, [onAddStop, isAddingStop, addStopError, route.stops.length, route]);
 
   const [selectedStop, setSelectedStop] = useState<RouteStop | null>(null);
-  const [showAddStopModal, setShowAddStopModal] = useState(false);
   const [showAddStopTooltip, setShowAddStopTooltip] = useState(false);
   const [showNavSelectorModal, setShowNavSelectorModal] = useState(false);
   const [isExportingRoute, setIsExportingRoute] = useState(false);
@@ -262,18 +206,14 @@ export function RouteMap({
   const [currentRegion, setCurrentRegion] = useState<any>(null);
   const [mapStatus, setMapStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [hasAnimatedIn, setHasAnimatedIn] = useState(false);
-  const [markersKey, setMarkersKey] = useState(0); // Force marker re-render
-  const [tracksViewChanges, setTracksViewChanges] = useState(false); // Temporarily enable tracking during updates
+  const [markersKey, setMarkersKey] = useState(0);
+  const [tracksViewChanges, setTracksViewChanges] = useState(false);
+  const [segmentRevision, setSegmentRevision] = useState(0);
   const mapRef = useRef<MapView>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Calculate offset positions for overlapping stops
-  // Filter out any stops with invalid coordinates to prevent crashes
+  // Calculate offset positions for overlapping stops (filter invalid coords)
   const stopsWithOffsets = useMemo(() => {
-    console.log('🔄 [RouteMap] Recalculating stopsWithOffsets');
-    console.log(`   Input stops: ${route.stops.length}`);
-    console.log(`   Stop IDs: ${route.stops.map(s => s.id).join(', ')}`);
-
     const validStops = route.stops.filter(stop =>
       typeof stop.latitude === 'number' &&
       typeof stop.longitude === 'number' &&
@@ -282,98 +222,56 @@ export function RouteMap({
       stop.latitude !== 0 &&
       stop.longitude !== 0
     );
-
-    if (validStops.length !== route.stops.length) {
-      console.warn(`⚠️ Filtered out ${route.stops.length - validStops.length} stops with invalid coordinates`);
-    }
-
-    console.log(`   Valid stops for rendering: ${validStops.length}`);
-    const result = calculateStopPositions(validStops);
-    console.log(`   Calculated positions for ${result.length} markers`);
-    return result;
+    return calculateStopPositions(validStops);
   }, [route.stops]);
 
   // Track previous stop count to fit map when stops are added/removed
   const prevStopCountRef = useRef(route.stops.length);
 
-  // Fit map to show all stops when stops are added or removed
   useEffect(() => {
     const stopCountChanged = route.stops.length !== prevStopCountRef.current;
 
     if (stopCountChanged && hasAnimatedIn && route.stops.length >= 2) {
-      const wasAdded = route.stops.length > prevStopCountRef.current;
-      const wasRemoved = route.stops.length < prevStopCountRef.current;
-
-      console.log(`🗺️ [RouteMap] Stop count changed from ${prevStopCountRef.current} to ${route.stops.length}`);
-      console.log(`   Action: ${wasAdded ? 'Added' : wasRemoved ? 'Removed' : 'Changed'}`);
-
-      // Fit map to show all remaining stops
       setTimeout(() => {
         if (mapRef.current && route.stops.length > 0) {
-          console.log('🗺️ [RouteMap] Re-fitting map to show all stops');
           mapRef.current.fitToCoordinates(
-            route.stops.map(s => ({ latitude: s.latitude, longitude: s.longitude })),
-            { edgePadding: { top: 100, right: 60, bottom: 100, left: 60 }, animated: true }
+            stopsWithOffsets.map(({ stop }) => ({ latitude: stop.latitude, longitude: stop.longitude })),
+            { edgePadding: { top: 100, right: 60, bottom: 280, left: 60 }, animated: true }
           );
         }
-      }, 300); // Slightly longer delay for removal to allow segments to update first
+      }, 300);
     }
 
     prevStopCountRef.current = route.stops.length;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [route.stops.length, hasAnimatedIn]);
 
-  // Initialize controls opacity to 0 (will fade in)
   const controlsOpacity = useRef(new Animated.Value(0)).current;
-
-  // Debug: Log when route stops change
-  useEffect(() => {
-    console.log('🗺️ RouteMap route updated:', route?.stops?.length, 'stops');
-    console.log('🗺️ Stop names:', route.stops.map(s => s.name).join(', '));
-    console.log('🗺️ Stop IDs:', route.stops.map(s => s.id).join(', '));
-  }, [route.stops]);
 
   // Force markers to re-render when stops change
   useEffect(() => {
-    console.log('🔄 [RouteMap] Forcing marker re-render - stops changed');
-    console.log(`   Stop count: ${route.stops.length}`);
-    console.log(`   Stop IDs: ${route.stops.map(s => s.id).join(', ')}`);
-
-    // Increment key to force React to remount markers
     setMarkersKey(prev => prev + 1);
-
-    // Temporarily enable tracksViewChanges to force marker updates
     setTracksViewChanges(true);
-
-    // Disable tracking after markers have updated (500ms should be enough)
-    const timeout = setTimeout(() => {
-      console.log('🔄 [RouteMap] Disabling tracksViewChanges after marker update');
-      setTracksViewChanges(false);
-    }, 500);
-
+    const timeout = setTimeout(() => setTracksViewChanges(false), 500);
     return () => clearTimeout(timeout);
   }, [route.stops.length, JSON.stringify(route.stops.map(s => s.id))]);
 
-  // Set up Google Maps initialization timeout
+  // Map initialization timeout
   useEffect(() => {
     setMapStatus('loading');
-    console.log('🗺️ Using: Google Maps');
 
-    // Fallback: force map to ready state after 3 seconds if callbacks don't fire
     timeoutRef.current = setTimeout(() => {
       setMapStatus((current) => {
         if (current === 'loading') {
-          console.warn('⚠️ Google Maps callbacks not firing - forcing ready state');
+          console.warn('[RouteMap] Forcing ready state after timeout');
           return 'ready';
         }
         return current;
       });
     }, 3000);
 
-    // Additional fallback: ensure controls are visible after 5 seconds
     const controlsTimeout = setTimeout(() => {
       if (!hasAnimatedIn) {
-        console.warn('⚠️ Controls animation did not complete - forcing visibility');
         controlsOpacity.setValue(1);
       }
     }, 5000);
@@ -387,223 +285,213 @@ export function RouteMap({
     };
   }, [controlsOpacity, hasAnimatedIn]);
 
-  // Calculate map bounds from route stops
+  // Calculate map bounds
   const bounds = useMemo(() => {
-    const lats = route.stops.map((s) => s.latitude);
-    const lngs = route.stops.map((s) => s.longitude);
-
+    const validStops = stopsWithOffsets.map(({ stop }) => stop);
+    if (validStops.length === 0) {
+      return { minLat: 0, maxLat: 0, minLng: 0, maxLng: 0 };
+    }
+    const lats = validStops.map((s) => s.latitude);
+    const lngs = validStops.map((s) => s.longitude);
     return {
       minLat: Math.min(...lats),
       maxLat: Math.max(...lats),
       minLng: Math.min(...lngs),
       maxLng: Math.max(...lngs),
     };
-  }, [route.stops]);
+  }, [stopsWithOffsets]);
 
-  // Calculate center point
-  const center = useMemo(() => {
-    return {
-      latitude: (bounds.minLat + bounds.maxLat) / 2,
-      longitude: (bounds.minLng + bounds.maxLng) / 2,
-    };
-  }, [bounds]);
+  const center = useMemo(() => ({
+    latitude: (bounds.minLat + bounds.maxLat) / 2,
+    longitude: (bounds.minLng + bounds.maxLng) / 2,
+  }), [bounds]);
 
-  // Calculate initial region - start at route bounds so all stops are visible immediately
   const initialRegion = useMemo(() => {
-    // Use route bounds with extra padding (1.8x) for comfortable viewing
     const latDelta = (bounds.maxLat - bounds.minLat) * 1.8;
     const lngDelta = (bounds.maxLng - bounds.minLng) * 1.8;
-
-    const region = {
+    return {
       latitude: center.latitude,
       longitude: center.longitude,
-      latitudeDelta: Math.max(latDelta, 0.02), // Minimum zoom level
+      latitudeDelta: Math.max(latDelta, 0.02),
       longitudeDelta: Math.max(lngDelta, 0.02),
     };
-
-    console.log('🗺️ Initial region (route bounds):', region);
-    return region;
   }, [center, bounds]);
 
-  // Convert stops to coordinates for Directions API
-  const stopCoordinates = useMemo(() => {
-    return route.stops.map((stop) => ({
-      latitude: stop.latitude,
-      longitude: stop.longitude,
-    }));
+  // Stable key based on stop coordinates — only re-fetch when positions change
+  const stopsKey = useMemo(() => {
+    return [...route.stops]
+      .filter(s =>
+        typeof s.latitude === 'number' && typeof s.longitude === 'number' &&
+        !isNaN(s.latitude) && !isNaN(s.longitude) &&
+        s.latitude !== 0 && s.longitude !== 0
+      )
+      .sort((a, b) => a.order - b.order)
+      .map(s => `${s.latitude.toFixed(6)},${s.longitude.toFixed(6)}`)
+      .join('|');
   }, [route.stops]);
 
-  // Use optimized segments from parent when available
+  // Fetch road-following directions when stops change
   useEffect(() => {
-    console.log('🔍 [RouteMap] Segments updated from parent');
-    console.log(`🔍 [RouteMap] Optimized segments:`, optimizedSegments.length);
-    console.log(`🔍 [RouteMap] Is optimizing:`, isOptimizing);
+    const validStops = [...route.stops]
+      .filter(s =>
+        typeof s.latitude === 'number' && typeof s.longitude === 'number' &&
+        !isNaN(s.latitude) && !isNaN(s.longitude) &&
+        s.latitude !== 0 && s.longitude !== 0
+      )
+      .sort((a, b) => a.order - b.order);
 
-    if (isOptimizing) {
-      console.log('🔍 [RouteMap] Optimization in progress, showing loading state');
+    if (validStops.length < 2) {
+      setRouteSegments([]);
+      setRouteCoordinates([]);
+      setIsLoadingRoute(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    let active = true;
+
+    (async () => {
+      const coords: RouteCoordinate[] = validStops.map(s => ({
+        latitude: s.latitude,
+        longitude: s.longitude,
+      }));
+      setRouteCoordinates(coords);
+      setRouteSegments([]);  // Clear old segments so fallback lines show through ALL stops
       setIsLoadingRoute(true);
-      setRouteSegments([]);
-      setRouteCoordinates([]);
-      return;
-    }
 
-    if (route.stops.length < 2) {
-      console.log('🔍 [RouteMap] Less than 2 stops, clearing route');
-      setRouteSegments([]);
-      setRouteCoordinates([]);
-      setIsLoadingRoute(false);
-      return;
-    }
+      try {
+        const modes: TravelMode[] = new Array(coords.length - 1).fill('driving');
+        const segments = await fetchCompleteRouteWithSegments(coords, modes, controller.signal);
 
-    if (optimizedSegments.length > 0) {
-      console.log('🔍 [RouteMap] Using optimized segments from parent');
+        if (!active) return;
 
-      // Validate segments before using them
-      const hasInvalidSegments = optimizedSegments.some(seg =>
-        seg.coordinates.some(c =>
-          !c.latitude || !c.longitude || isNaN(c.latitude) || isNaN(c.longitude) ||
-          c.latitude === 0 || c.longitude === 0
-        )
-      );
-
-      if (hasInvalidSegments) {
-        console.error('❌ [RouteMap] Optimized segments contain invalid coordinates');
-        setRouteSegments([]);
-        setRouteCoordinates([]);
-        setIsLoadingRoute(false);
-        return;
+        if (segments.length > 0) {
+          console.log(`[RouteMap] Directions: ${segments.length} segments, ${segments.reduce((sum, s) => sum + s.coordinates.length, 0)} coords`);
+          setRouteSegments(segments);
+          setSegmentRevision(prev => prev + 1);
+          setRouteCoordinates([]);
+        }
+      } catch (error) {
+        if (!active) return;
+        if (error instanceof Error && error.name === 'AbortError') return;
+        console.error('[RouteMap] Direction fetch failed:', error);
+        // Only now clear segments so straight-line fallback shows
+        if (active) setRouteSegments([]);
+      } finally {
+        if (active) setIsLoadingRoute(false);
       }
+    })();
 
-      setRouteSegments(optimizedSegments);
-      setRouteCoordinates([]);
-      setIsLoadingRoute(false);
-    } else {
-      console.log('🔍 [RouteMap] No optimized segments, using fallback straight lines');
-      // Fallback: show straight lines between stops
-      const validCoords = stopCoordinates.filter(c =>
-        typeof c.latitude === 'number' &&
-        typeof c.longitude === 'number' &&
-        !isNaN(c.latitude) &&
-        !isNaN(c.longitude) &&
-        c.latitude !== 0 &&
-        c.longitude !== 0
+    return () => {
+      active = false;
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stopsKey]);
+
+  // Fit map after polylines render
+  useEffect(() => {
+    if (!hasAnimatedIn || !mapRef.current || routeSegments.length === 0) return;
+
+    const fitTimer = setTimeout(() => {
+      if (!mapRef.current) return;
+      const allCoords = routeSegments.flatMap(seg => seg.coordinates);
+      if (allCoords.length === 0) return;
+      mapRef.current.fitToCoordinates(allCoords, {
+        edgePadding: { top: 100, right: 60, bottom: 280, left: 60 },
+        animated: true,
+      });
+    }, 100);
+
+    const nudgeTimer = setTimeout(() => {
+      if (!mapRef.current || !currentRegion) return;
+      mapRef.current.animateToRegion(
+        { ...currentRegion, latitudeDelta: currentRegion.latitudeDelta + 0.000001 },
+        1
       );
+    }, 500);
 
-      setRouteCoordinates(validCoords);
-      setRouteSegments([]);
-      setIsLoadingRoute(false);
-    }
-  }, [optimizedSegments, isOptimizing, route.stops.length, stopCoordinates]);
+    return () => {
+      clearTimeout(fitTimer);
+      clearTimeout(nudgeTimer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [segmentRevision]);
 
   // Animate map and elements when ready
   useEffect(() => {
     if (mapStatus === 'ready' && route.stops.length > 0 && !hasAnimatedIn) {
-      console.log('🎬 Starting map animations');
       setHasAnimatedIn(true);
 
-      // Immediately fit to show all stops with proper padding
       if (mapRef.current) {
-        console.log('🎬 Fitting to coordinates');
         mapRef.current.fitToCoordinates(
-          route.stops.map(s => ({ latitude: s.latitude, longitude: s.longitude })),
-          { edgePadding: { top: 100, right: 60, bottom: 100, left: 60 }, animated: false }
+          stopsWithOffsets.map(({ stop }) => ({ latitude: stop.latitude, longitude: stop.longitude })),
+          { edgePadding: { top: 100, right: 60, bottom: 280, left: 60 }, animated: false }
         );
       }
 
-      // Fade in controls
       Animated.timing(controlsOpacity, {
         toValue: 1,
         duration: 400,
         delay: 300,
         useNativeDriver: true,
-      }).start(() => {
-        console.log('✅ Controls fade-in animation completed - buttons should be visible');
-      });
+      }).start();
     }
-  }, [mapStatus, route.stops, hasAnimatedIn, controlsOpacity]);
+  }, [mapStatus, route.stops, hasAnimatedIn, controlsOpacity, stopsWithOffsets]);
 
-  // Fit bounds to show all stops
   const fitBounds = () => {
-    if (!mapRef.current || route.stops.length === 0) return;
-
-    const coordinates = route.stops.map((stop) => ({
+    if (!mapRef.current || stopsWithOffsets.length === 0) return;
+    const coordinates = stopsWithOffsets.map(({ stop }) => ({
       latitude: stop.latitude,
       longitude: stop.longitude,
     }));
-
     mapRef.current.fitToCoordinates(coordinates, {
-      edgePadding: {
-        top: 80,
-        right: 80,
-        bottom: 80,
-        left: 80,
-      },
+      edgePadding: { top: 100, right: 60, bottom: 280, left: 60 },
       animated: true,
     });
   };
 
-  // Zoom in - decrease latitudeDelta/longitudeDelta for closer view
   const zoomIn = () => {
     if (!mapRef.current || !currentRegion) return;
-
-    const newRegion = {
+    mapRef.current.animateToRegion({
       ...currentRegion,
       latitudeDelta: currentRegion.latitudeDelta / 2,
       longitudeDelta: currentRegion.longitudeDelta / 2,
-    };
-
-    mapRef.current.animateToRegion(newRegion, 300);
+    }, 300);
   };
 
-  // Zoom out - increase latitudeDelta/longitudeDelta for wider view
   const zoomOut = () => {
     if (!mapRef.current || !currentRegion) return;
-
-    const newRegion = {
+    mapRef.current.animateToRegion({
       ...currentRegion,
       latitudeDelta: currentRegion.latitudeDelta * 2,
       longitudeDelta: currentRegion.longitudeDelta * 2,
-    };
-
-    mapRef.current.animateToRegion(newRegion, 300);
+    }, 300);
   };
 
-  // Export route to Apple Maps with all stops as directions
   const exportToAppleMaps = useCallback(async () => {
     if (route.stops.length === 0) {
       Alert.alert('No Stops', 'There are no stops to export.');
       return;
     }
 
-    // Sort stops by order
     const sortedStops = [...route.stops].sort((a, b) => a.order - b.order);
-
-    // Build Apple Maps URL with multiple waypoints
-    // Format: maps://?saddr=LAT,LNG&daddr=LAT,LNG+to:LAT,LNG+to:LAT,LNG
     const firstStop = sortedStops[0];
     const remainingStops = sortedStops.slice(1);
-
-    // Start address (first stop)
     const saddr = `${firstStop.latitude},${firstStop.longitude}`;
-
-    // Destination addresses (remaining stops joined with +to:)
     const daddr = remainingStops
       .map(stop => `${stop.latitude},${stop.longitude}`)
       .join('+to:');
 
-    // Build the full URL
     const url = remainingStops.length > 0
       ? `maps://?saddr=${saddr}&daddr=${daddr}&dirflg=d`
       : `maps://?saddr=${saddr}&dirflg=d`;
-
-    console.log('🗺️ Opening Apple Maps with route:', url);
 
     try {
       const supported = await Linking.canOpenURL(url);
       if (supported) {
         await Linking.openURL(url);
       } else {
-        // Fallback to web URL
         const webUrl = remainingStops.length > 0
           ? `http://maps.apple.com/?saddr=${saddr}&daddr=${daddr}&dirflg=d`
           : `http://maps.apple.com/?saddr=${saddr}&dirflg=d`;
@@ -611,65 +499,39 @@ export function RouteMap({
       }
     } catch (error) {
       console.error('Error opening Apple Maps:', error);
-      Alert.alert(
-        'Unable to Open Maps',
-        'Could not open Apple Maps. Please try again.'
-      );
+      Alert.alert('Unable to Open Maps', 'Could not open Apple Maps. Please try again.');
     }
   }, [route.stops]);
 
-  // Export route to Google Maps with all stops as waypoints
   const exportToGoogleMaps = useCallback(async () => {
     if (route.stops.length === 0) {
       Alert.alert('No Stops', 'There are no stops to export.');
       return;
     }
 
-    // Sort stops by order
     const sortedStops = [...route.stops].sort((a, b) => a.order - b.order);
-
-    // Build Google Maps URL with waypoints
-    // Format: https://www.google.com/maps/dir/?api=1&origin=LAT,LNG&destination=LAT,LNG&waypoints=LAT,LNG|LAT,LNG&travelmode=driving
     const firstStop = sortedStops[0];
     const lastStop = sortedStops[sortedStops.length - 1];
     const middleStops = sortedStops.slice(1, -1);
-
-    // Origin (first stop)
     const origin = `${firstStop.latitude},${firstStop.longitude}`;
-
-    // Destination (last stop)
     const destination = `${lastStop.latitude},${lastStop.longitude}`;
-
-    // Waypoints (middle stops, separated by |)
-    // Note: Mobile browsers support up to 3 waypoints, but we'll include all and let Google handle it
     const waypoints = middleStops
       .map(stop => `${stop.latitude},${stop.longitude}`)
       .join('|');
 
-    // Build the full URL using cross-platform Maps URLs (works via Universal Links on iOS)
     let url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
-
-    // Add waypoints if there are intermediate stops
     if (waypoints) {
       url += `&waypoints=${encodeURIComponent(waypoints)}`;
     }
 
-    console.log('🗺️ Opening Google Maps with route:', url);
-
     try {
-      // Open URL - Google Maps app will intercept via Universal Links on iOS
-      // On Android, Google Maps app handles the URL if installed
       await Linking.openURL(url);
     } catch (error) {
       console.error('Error opening Google Maps:', error);
-      Alert.alert(
-        'Unable to Open Google Maps',
-        'Could not open Google Maps. Please try again.'
-      );
+      Alert.alert('Unable to Open Google Maps', 'Could not open Google Maps. Please try again.');
     }
   }, [route.stops]);
 
-  // Handle navigation app selection
   const handleNavigationAppSelect = useCallback(async (app: NavigationApp) => {
     setIsExportingRoute(true);
     try {
@@ -686,7 +548,6 @@ export function RouteMap({
     }
   }, [exportToAppleMaps, exportToGoogleMaps]);
 
-  // Log map status changes to console instead of displaying on screen
   useEffect(() => {
     if (mapStatus === 'error') {
       console.error('Google Maps failed to load. Check API key restrictions.');
@@ -711,42 +572,25 @@ export function RouteMap({
         pitchEnabled={true}
         zoomEnabled={true}
         legalLabelInsets={{ top: 0, left: 0, bottom: -20, right: 0 }}
-        onRegionChangeComplete={(region) => {
-          setCurrentRegion(region);
-          console.log('🗺️ Google Maps region changed - map is interactive');
-        }}
+        onRegionChangeComplete={(region) => setCurrentRegion(region)}
         onMapReady={() => {
-          console.log('✅ MapView onMapReady called - native map initialized');
-          console.log(`   Provider: ${MAP_PROVIDER === PROVIDER_GOOGLE ? 'Google Maps' : 'Apple Maps'}`);
-          console.log('   Custom style rules:', MAP_PROVIDER === PROVIDER_GOOGLE ? PASTEL_MAP_STYLE.length : 'N/A (Apple Maps)');
-          console.log(`   Timestamp: ${new Date().toISOString()}`);
-
-          // Clear the timeout since map loaded successfully
           if (timeoutRef.current) {
             clearTimeout(timeoutRef.current);
             timeoutRef.current = null;
-            console.log('✅ Timeout cleared - map initialized successfully');
           }
-
           setMapStatus('ready');
         }}
-        onMapLoaded={() => {
-          console.log('✅ MapView onMapLoaded called - tiles should be visible');
-          console.log(`   Timestamp: ${new Date().toISOString()}`);
-          setMapStatus('ready');
-        }}
+        onMapLoaded={() => setMapStatus('ready')}
       >
-        {/* Route segments with 3-layer effect (shadow, main, glow) */}
-        {/* Guard: Only render when map is ready and not loading to prevent native crash */}
-        {mapStatus === 'ready' && !isLoadingRoute && routeSegments.length > 0 && (
+        {/* Route segments with 3-layer effect */}
+        {mapStatus === 'ready' && routeSegments.length > 0 && (
           <>
             {routeSegments.map((segment) => {
               const colors = segment.mode === 'walking'
                 ? MapColors.route.walking
                 : MapColors.route.driving;
               return (
-                <React.Fragment key={`segment-${segment.id}`}>
-                  {/* Shadow layer */}
+                <React.Fragment key={`segment-${segment.id}-r${segmentRevision}`}>
                   <Polyline
                     coordinates={segment.coordinates}
                     strokeColor={colors.shadow}
@@ -755,7 +599,6 @@ export function RouteMap({
                     lineJoin="round"
                     lineDashPattern={segment.mode === 'walking' ? [8, 8] : undefined}
                   />
-                  {/* Main line */}
                   <Polyline
                     coordinates={segment.coordinates}
                     strokeColor={colors.main}
@@ -764,7 +607,6 @@ export function RouteMap({
                     lineJoin="round"
                     lineDashPattern={segment.mode === 'walking' ? [8, 8] : undefined}
                   />
-                  {/* Inner glow */}
                   <Polyline
                     coordinates={segment.coordinates}
                     strokeColor={colors.glow}
@@ -779,11 +621,9 @@ export function RouteMap({
           </>
         )}
 
-        {/* Fallback: route line with 3-layer effect */}
-        {/* Guard: Only render when map is ready and not loading to prevent native crash */}
-        {mapStatus === 'ready' && !isLoadingRoute && routeCoordinates.length > 0 && routeSegments.length === 0 && (
-          <>
-            {/* Shadow layer */}
+        {/* Fallback: straight-line route while directions load */}
+        {mapStatus === 'ready' && routeCoordinates.length > 0 && routeSegments.length === 0 && (
+          <React.Fragment key={`fallback-${stopsKey}`}>
             <Polyline
               coordinates={routeCoordinates}
               strokeColor={MapColors.route.driving.shadow}
@@ -791,7 +631,6 @@ export function RouteMap({
               lineCap="round"
               lineJoin="round"
             />
-            {/* Main yellow route line */}
             <Polyline
               coordinates={routeCoordinates}
               strokeColor={MapColors.route.driving.main}
@@ -799,7 +638,6 @@ export function RouteMap({
               lineCap="round"
               lineJoin="round"
             />
-            {/* Inner glow */}
             <Polyline
               coordinates={routeCoordinates}
               strokeColor={MapColors.route.driving.glow}
@@ -807,11 +645,10 @@ export function RouteMap({
               lineCap="round"
               lineJoin="round"
             />
-          </>
+          </React.Fragment>
         )}
 
         {/* Parking location markers */}
-        {/* Guard: Only render when map is ready to prevent native crash */}
         {mapStatus === 'ready' && route.stops
           .filter(stop => stop.parkingLocation)
           .map((stop) => (
@@ -830,8 +667,7 @@ export function RouteMap({
             </Marker>
           ))}
 
-        {/* Offset indicator lines - dashed lines from offset marker to true location */}
-        {/* Guard: Only render when map is ready to prevent native crash */}
+        {/* Offset indicator lines */}
         {mapStatus === 'ready' && stopsWithOffsets
           .filter(({ isOffset }) => isOffset)
           .map(({ stop, displayLat, displayLng }) => (
@@ -848,8 +684,7 @@ export function RouteMap({
             />
           ))}
 
-        {/* Stop markers with floating title labels - using offset positions */}
-        {/* Guard: Only render when map is ready to prevent native crash */}
+        {/* Stop markers with floating title labels */}
         {mapStatus === 'ready' && stopsWithOffsets.map(({ stop, displayLat, displayLng }) => (
           <Marker
             key={`${stop.id}-${markersKey}`}
@@ -880,7 +715,7 @@ export function RouteMap({
         ))}
       </MapView>
 
-      {/* Loading indicator for route fetching */}
+      {/* Loading indicator */}
       {isLoadingRoute && (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator size="large" color={MapColors.loading.spinner} />
@@ -890,24 +725,25 @@ export function RouteMap({
         </View>
       )}
 
-      {/* Add Stop Button - top left with tooltip */}
-      {onAddStop && (
+      {/* Add Stop Button */}
+      {onOpenAddStop && (
         <Animated.View style={[styles.addStopButtonContainer, { opacity: controlsOpacity }]}>
           <Pressable
-            style={styles.addStopButton}
-            onPress={() => {
-              console.log('🔘 Add Stop button pressed - opening modal');
-              setShowAddStopModal(true);
-            }}
+            style={[styles.addStopButton, isAddingStop && styles.addStopButtonDisabled]}
+            onPress={() => !isAddingStop && onOpenAddStop()}
+            disabled={isAddingStop}
             onHoverIn={() => Platform.OS === 'web' && setShowAddStopTooltip(true)}
             onHoverOut={() => Platform.OS === 'web' && setShowAddStopTooltip(false)}
             accessibilityLabel="Add Venue"
             accessibilityHint="Add a new stop to your route"
             accessibilityRole="button"
           >
-            <IconSymbol name="plus" size={22} color={MapColors.controls.icon} />
+            {isAddingStop ? (
+              <ActivityIndicator size="small" color={MapColors.controls.icon} />
+            ) : (
+              <IconSymbol name="plus" size={22} color={MapColors.controls.icon} />
+            )}
           </Pressable>
-          {/* Tooltip - visible on hover (web only) */}
           {showAddStopTooltip && (
             <View style={styles.tooltip}>
               <ThemedText style={styles.tooltipText}>Add Venue</ThemedText>
@@ -916,7 +752,7 @@ export function RouteMap({
         </Animated.View>
       )}
 
-      {/* Export to Navigation App Button - top right */}
+      {/* Export to Navigation App Button */}
       <Animated.View style={[styles.exportButtonContainer, { opacity: controlsOpacity }]}>
         <TouchableOpacity
           style={styles.exportButton}
@@ -928,24 +764,19 @@ export function RouteMap({
         </TouchableOpacity>
       </Animated.View>
 
-      {/* Map Controls - animated fade in */}
+      {/* Map Controls */}
       <Animated.View style={[styles.mapControls, { opacity: controlsOpacity }]}>
-        {/* Zoom Extents Button */}
         <TouchableOpacity
           style={[styles.controlButton, styles.extentsButton]}
           onPress={fitBounds}
         >
-          <ThemedText style={styles.controlButtonText}>⊡</ThemedText>
+          <ThemedText style={styles.controlButtonText}>&#x2291;</ThemedText>
         </TouchableOpacity>
-
-        {/* Zoom In Button */}
         <TouchableOpacity style={styles.controlButton} onPress={zoomIn}>
           <ThemedText style={styles.controlButtonText}>+</ThemedText>
         </TouchableOpacity>
-
-        {/* Zoom Out Button */}
         <TouchableOpacity style={styles.controlButton} onPress={zoomOut}>
-          <ThemedText style={styles.controlButtonText}>−</ThemedText>
+          <ThemedText style={styles.controlButtonText}>&minus;</ThemedText>
         </TouchableOpacity>
       </Animated.View>
 
@@ -958,35 +789,6 @@ export function RouteMap({
         onRemoveStop={onRemoveStop}
         isRemovingStop={isRemovingStop}
       />
-
-      {/* Add stop modal */}
-      {onAddStop && (
-        <AddStopModal
-          visible={showAddStopModal}
-          onClose={() => {
-            console.log('🔘 Add Stop modal closing');
-            setShowAddStopModal(false);
-          }}
-          onSubmit={async (prompt) => {
-            console.log('🔘 Add Stop modal submitted with prompt:', prompt);
-            try {
-              const result = await onAddStop(prompt);
-              console.log('🔘 onAddStop result:', result);
-              if (result?.success) {
-                console.log('✅ Add Stop successful - closing modal');
-                setShowAddStopModal(false);
-              } else {
-                console.log('❌ Add Stop failed');
-              }
-            } catch (error) {
-              console.error('❌ Add Stop threw error:', error);
-            }
-          }}
-          isLoading={isAddingStop}
-          error={addStopError}
-          onClearError={onClearAddStopError || (() => {})}
-        />
-      )}
 
       {/* Navigation app selector modal */}
       <NavigationAppSelectorModal
@@ -1041,6 +843,9 @@ const styles = StyleSheet.create({
     borderRadius: 23,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  addStopButtonDisabled: {
+    opacity: 0.5,
   },
   tooltip: {
     position: 'absolute',

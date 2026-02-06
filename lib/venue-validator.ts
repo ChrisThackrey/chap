@@ -40,6 +40,12 @@ interface NormalizedVenue {
 }
 
 /**
+ * Google Places API maximum radius (in meters)
+ * Requests with radius > 50000 return INVALID_ARGUMENT error
+ */
+const MAX_GOOGLE_PLACES_RADIUS = 50000;
+
+/**
  * Validation configuration
  */
 const VALIDATION_CONFIG = {
@@ -87,7 +93,8 @@ export async function validateAndEnrichStops(
   stops: Partial<RouteStop>[],
   userLocation?: UserLocation,
   maxDistanceMiles?: number,
-  searchKeywords?: string[]
+  searchKeywords?: string[],
+  originalPrompt?: string
 ): Promise<RouteValidationResult<RouteStop[]>> {
   // Store keywords for use in scoring
   currentSearchKeywords = searchKeywords || [];
@@ -129,7 +136,8 @@ export async function validateAndEnrichStops(
         i,
         maxRadiusMeters,
         maxDistanceKm,
-        primaryProvider
+        primaryProvider,
+        originalPrompt
       );
       validatedStops.push(result.data);
       warnings.push(...result.warnings);
@@ -174,7 +182,8 @@ async function validateStopWithProviderChain(
   stopIndex?: number,
   maxRadiusMeters?: number,
   maxDistanceKm?: number,
-  primaryProvider?: 'google' | 'foursquare'
+  primaryProvider?: 'google' | 'foursquare',
+  originalPrompt?: string
 ): Promise<RouteValidationResult<RouteStop>> {
   const expandedRadius = maxRadiusMeters || VALIDATION_CONFIG.EXPANDED_RADIUS;
   const regionDistanceKm = maxDistanceKm || VALIDATION_CONFIG.MAX_REGION_DISTANCE_KM;
@@ -194,6 +203,25 @@ async function validateStopWithProviderChain(
       message: `Address for "${stop.name}" may be too generic: ${addressQuality.issues.join(', ')}`,
       suggestedAction: addressQuality.suggestions?.[0],
     });
+  }
+
+  // Strategy 0: Search Google Places directly with the user's original prompt
+  // This bypasses the AI-reinterpreted venue name and finds what the user actually asked for
+  if (originalPrompt && isGooglePlacesConfigured()) {
+    const directResult = await tryDirectPromptSearch(
+      originalPrompt,
+      stop,
+      userLocation,
+      stopIndex,
+      expandedRadius,
+      regionDistanceKm,
+      warnings
+    );
+    if (directResult) {
+      console.log(`[Strategy 0] Found venue directly from prompt: ${directResult.data.name}`);
+      return directResult;
+    }
+    console.log(`[Strategy 0] No direct match for prompt, falling through to Strategy 1+`);
   }
 
   // Try Google Places first (if available)
@@ -220,6 +248,112 @@ async function validateStopWithProviderChain(
 }
 
 /**
+ * Strategy 0: Search Google Places directly with the user's original prompt text
+ * This finds the venue the user actually asked for, bypassing AI reinterpretation
+ */
+async function tryDirectPromptSearch(
+  originalPrompt: string,
+  stop: Partial<RouteStop>,
+  userLocation?: UserLocation,
+  stopIndex?: number,
+  expandedRadius?: number,
+  regionDistanceKm?: number,
+  warnings?: ValidationWarning[]
+): Promise<RouteValidationResult<RouteStop> | null> {
+  try {
+    const location = await getSearchCenter(stop, userLocation);
+
+    console.log(`🔍 [Strategy 0] Searching Google Places with original prompt: "${originalPrompt}"`);
+
+    // Search Google Places Text Search directly with the user's original prompt
+    // Cap radius at Google Places API limit (50,000m) to avoid INVALID_ARGUMENT errors
+    const searchRadius = Math.min(expandedRadius || VALIDATION_CONFIG.EXPANDED_RADIUS, MAX_GOOGLE_PLACES_RADIUS);
+    const places = await searchGooglePlaces(
+      originalPrompt,
+      location.latitude,
+      location.longitude,
+      searchRadius
+    );
+
+    if (places.length === 0) {
+      console.log(`[Strategy 0] No results for original prompt`);
+      return null;
+    }
+
+    // Filter for valid coordinates
+    const validPlaces = places.filter(
+      p => p.location &&
+        typeof p.location.latitude === 'number' &&
+        typeof p.location.longitude === 'number' &&
+        !isNaN(p.location.latitude) &&
+        !isNaN(p.location.longitude)
+    );
+
+    if (validPlaces.length === 0) {
+      console.log(`[Strategy 0] No places with valid coordinates`);
+      return null;
+    }
+
+    // Take the top result (Google's relevance ranking handles venue name matching)
+    const bestPlace = validPlaces[0];
+
+    // Validate distance from user location
+    if (userLocation && regionDistanceKm) {
+      const distanceKm = calculateDistanceKm(
+        userLocation.latitude,
+        userLocation.longitude,
+        bestPlace.location!.latitude,
+        bestPlace.location!.longitude
+      );
+
+      console.log(`📏 [Strategy 0] Venue "${bestPlace.displayName.text}" is ${distanceKm.toFixed(2)} km away (limit: ${regionDistanceKm.toFixed(2)} km)`);
+
+      if (distanceKm > regionDistanceKm) {
+        console.log(`[Strategy 0] Venue exceeds radius, falling through`);
+        return null;
+      }
+
+      // Warn if near edge of radius
+      if (warnings && distanceKm > regionDistanceKm * 0.8) {
+        const distanceMiles = distanceKm * 0.621371;
+        const limitMiles = regionDistanceKm * 0.621371;
+        warnings.push({
+          severity: 'info',
+          stopIndex,
+          stopName: bestPlace.displayName.text,
+          message: `"${bestPlace.displayName.text}" is ${distanceMiles.toFixed(1)} miles from center (near edge of ${limitMiles.toFixed(0)} mile radius)`,
+        });
+      }
+    }
+
+    // Get detailed information
+    const placeDetails = await getGoogleDetails(bestPlace.id);
+    const place = placeDetails || bestPlace;
+
+    const enrichedStop: RouteStop = {
+      id: uuid.v4() as string,
+      name: place.displayName.text,
+      type: stop.type!,
+      description: stop.description || '',
+      address: place.formattedAddress || stop.address!,
+      latitude: place.location?.latitude ?? bestPlace.location!.latitude,
+      longitude: place.location?.longitude ?? bestPlace.location!.longitude,
+      duration: stop.duration || 60,
+      order: stop.order || 1,
+      venueDetails: mapGooglePlaceToVenueDetails(place),
+      validationStatus: 'verified',
+    };
+
+    console.log(`✅ [Strategy 0] Validated venue: ${enrichedStop.name}`);
+    return { data: enrichedStop, warnings: warnings || [] };
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.warn(`[Strategy 0] Failed: ${errorMsg}`);
+    return null;
+  }
+}
+
+/**
  * Try to find venue using Google Places API
  */
 async function tryGooglePlaces(
@@ -228,7 +362,8 @@ async function tryGooglePlaces(
   stopIndex?: number,
   expandedRadius?: number,
   regionDistanceKm?: number,
-  warnings?: ValidationWarning[]
+  warnings?: ValidationWarning[],
+  isLastResort?: boolean  // NEW parameter for flexible validation
 ): Promise<RouteValidationResult<RouteStop> | null> {
   try {
     const location = await getSearchCenter(stop, userLocation);
@@ -253,13 +388,13 @@ async function tryGooglePlaces(
       );
     }
 
-    // Strategy 3: Expand radius
+    // Strategy 3: Expand radius (capped at Google Places API limit)
     if (places.length === 0 && expandedRadius) {
       places = await searchGoogleByType(
         stop.type!,
         location.latitude,
         location.longitude,
-        expandedRadius,
+        Math.min(expandedRadius, MAX_GOOGLE_PLACES_RADIUS),
         VALIDATION_CONFIG.SEARCH_LIMIT
       );
     }
@@ -306,14 +441,26 @@ async function tryGooglePlaces(
 
       console.log(`📏 [Google] Venue "${bestVenue.name}" is ${distanceKm.toFixed(2)} km away (limit: ${regionDistanceKm.toFixed(2)} km)`);
 
-      // Hard reject if venue exceeds the radius limit
-      if (distanceKm > regionDistanceKm) {
+      // Hard reject if venue exceeds radius (unless this is last resort)
+      if (distanceKm > regionDistanceKm && !isLastResort) {
         console.warn(`❌ [Google] Venue "${bestVenue.name}" exceeds radius limit (${distanceKm.toFixed(1)}km > ${regionDistanceKm.toFixed(1)}km), rejecting`);
         return null; // This will cause fallback to next provider or geocoding
       }
 
+      // On last resort, accept but warn
+      if (distanceKm > regionDistanceKm && isLastResort) {
+        const distanceMiles = distanceKm * 0.621371;
+        const limitMiles = regionDistanceKm * 0.621371;
+        warnings?.push({
+          severity: 'warning',
+          stopIndex,
+          stopName: stop.name,
+          message: `"${bestVenue.name}" is ${distanceMiles.toFixed(1)} miles away (exceeds ${limitMiles.toFixed(0)} mile radius, but was best match available)`,
+        });
+      }
+
       // Warn if venue is at edge of radius (>80% of limit)
-      if (warnings && distanceKm > regionDistanceKm * 0.8) {
+      if (warnings && distanceKm > regionDistanceKm * 0.8 && !isLastResort) {
         const distanceMiles = distanceKm * 0.621371;
         const limitMiles = regionDistanceKm * 0.621371;
         warnings.push({
@@ -346,7 +493,23 @@ async function tryGooglePlaces(
     console.log(`[Google] Validated venue: ${enrichedStop.name} (rating: ${enrichedStop.venueDetails?.rating})`);
     return { data: enrichedStop, warnings: warnings || [] };
   } catch (error) {
-    console.warn(`Google Places error for ${stop.name}:`, error instanceof Error ? error.message : error);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
+
+    console.warn(`[Google Places] Failed to find "${stop.name}":`, errorMsg);
+    if (errorStack) {
+      console.warn('[Google Places] Error stack:', errorStack);
+    }
+
+    // Add to warnings so errors aren't silently swallowed
+    if (warnings) {
+      warnings.push({
+        severity: 'info',
+        stopName: stop.name,
+        message: `Google Places search unsuccessful: ${errorMsg}`,
+      });
+    }
+
     return null;
   }
 }
@@ -360,7 +523,8 @@ async function tryFoursquare(
   stopIndex?: number,
   expandedRadius?: number,
   regionDistanceKm?: number,
-  warnings?: ValidationWarning[]
+  warnings?: ValidationWarning[],
+  isLastResort?: boolean  // NEW parameter for flexible validation
 ): Promise<RouteValidationResult<RouteStop> | null> {
   try {
     const location = await getSearchCenter(stop, userLocation);
@@ -386,13 +550,13 @@ async function tryFoursquare(
       );
     }
 
-    // Strategy 3: Expand radius
+    // Strategy 3: Expand radius (capped at API limit)
     if (venues.length === 0 && expandedRadius) {
       venues = await searchFoursquareByType(
         stop.type!,
         location.latitude,
         location.longitude,
-        expandedRadius,
+        Math.min(expandedRadius, MAX_GOOGLE_PLACES_RADIUS),
         VALIDATION_CONFIG.SEARCH_LIMIT
       );
     }
@@ -439,14 +603,26 @@ async function tryFoursquare(
 
       console.log(`📏 [Foursquare] Venue "${bestVenue.name}" is ${distanceKm.toFixed(2)} km away (limit: ${regionDistanceKm.toFixed(2)} km)`);
 
-      // Hard reject if venue exceeds the radius limit
-      if (distanceKm > regionDistanceKm) {
+      // Hard reject if venue exceeds radius (unless this is last resort)
+      if (distanceKm > regionDistanceKm && !isLastResort) {
         console.warn(`❌ [Foursquare] Venue "${bestVenue.name}" exceeds radius limit (${distanceKm.toFixed(1)}km > ${regionDistanceKm.toFixed(1)}km), rejecting`);
         return null; // This will cause fallback to next provider or geocoding
       }
 
+      // On last resort, accept but warn
+      if (distanceKm > regionDistanceKm && isLastResort) {
+        const distanceMiles = distanceKm * 0.621371;
+        const limitMiles = regionDistanceKm * 0.621371;
+        warnings?.push({
+          severity: 'warning',
+          stopIndex,
+          stopName: stop.name,
+          message: `"${bestVenue.name}" is ${distanceMiles.toFixed(1)} miles away (exceeds ${limitMiles.toFixed(0)} mile radius, but was best match available)`,
+        });
+      }
+
       // Warn if venue is at edge of radius (>80% of limit)
-      if (warnings && distanceKm > regionDistanceKm * 0.8) {
+      if (warnings && distanceKm > regionDistanceKm * 0.8 && !isLastResort) {
         const distanceMiles = distanceKm * 0.621371;
         const limitMiles = regionDistanceKm * 0.621371;
         warnings.push({
@@ -483,7 +659,23 @@ async function tryFoursquare(
     console.log(`[Foursquare] Validated venue: ${enrichedStop.name} (rating: ${enrichedStop.venueDetails?.rating})`);
     return { data: enrichedStop, warnings: warnings || [] };
   } catch (error) {
-    console.warn(`Foursquare error for ${stop.name}:`, error instanceof Error ? error.message : error);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
+
+    console.warn(`[Foursquare] Failed to find "${stop.name}":`, errorMsg);
+    if (errorStack) {
+      console.warn('[Foursquare] Error stack:', errorStack);
+    }
+
+    // Add to warnings
+    if (warnings) {
+      warnings.push({
+        severity: 'info',
+        stopName: stop.name,
+        message: `Foursquare search unsuccessful: ${errorMsg}`,
+      });
+    }
+
     return null;
   }
 }

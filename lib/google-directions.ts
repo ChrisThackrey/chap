@@ -190,22 +190,26 @@ export async function fetchDirections(
   // Create combined AbortController with timeout and external signal
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
-    console.error(`❌ [fetchDirections] Fetch timeout after 10s - aborting`);
+    console.error(`❌ [fetchDirections] Fetch timeout after 15s - aborting`);
     controller.abort();
-  }, 10000); // 10 second timeout
+  }, 15000); // 15 second timeout (generous for mobile networks)
 
-  // Listen to external abort signal
+  // Listen to external abort signal with cleanup
+  const onExternalAbort = () => {
+    console.log('🚫 [fetchDirections] External cancellation signal received');
+    controller.abort();
+  };
   if (signal) {
-    signal.addEventListener('abort', () => {
-      console.log('🚫 [fetchDirections] External cancellation signal received');
-      controller.abort();
-    });
+    signal.addEventListener('abort', onExternalAbort, { once: true });
   }
 
   try {
     console.log(`🔍 [fetchDirections] Calling fetch with abort controller...`);
+
     const response = await fetch(url, { signal: controller.signal });
+
     clearTimeout(timeoutId); // Clear timeout on success
+    if (signal) signal.removeEventListener('abort', onExternalAbort);
     console.log(`🔍 [fetchDirections] Fetch completed, status: ${response.status}`);
 
     if (!response.ok) {
@@ -291,6 +295,7 @@ export async function fetchDirections(
     return result;
   } catch (error) {
     clearTimeout(timeoutId); // Clear timeout on error
+    if (signal) signal.removeEventListener('abort', onExternalAbort);
     console.error('❌ [fetchDirections] Caught error:');
     console.error('❌ [fetchDirections] Error type:', error?.constructor?.name || typeof error);
     console.error('❌ [fetchDirections] Error message:', error instanceof Error ? error.message : String(error));
@@ -434,8 +439,20 @@ export async function fetchCompleteRouteWithSegments(
     }
 
     console.log(`   🔍 Calling fetchDirections for segment ${i + 1}...`);
-    const result = await fetchDirections(origin, destination, mode, signal);
-    console.log(`   🔍 fetchDirections returned for segment ${i + 1}`);
+
+    let result: DirectionsResult | null = null;
+    try {
+      result = await fetchDirections(origin, destination, mode, signal);
+      console.log(`   🔍 fetchDirections returned for segment ${i + 1}`);
+    } catch (segmentError) {
+      // Re-throw AbortErrors — entire operation must stop
+      if (segmentError instanceof Error && segmentError.name === 'AbortError') {
+        throw segmentError;
+      }
+      console.error(`❌ [GoogleDirections] Segment ${i + 1} failed:`, segmentError);
+      // Continue with fallback straight line for this segment
+      result = null;
+    }
 
     // Track when we last fetched (not cached)
     if (!willHitCache) {

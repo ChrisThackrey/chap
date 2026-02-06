@@ -1,5 +1,6 @@
-import { VenueDetails, VenuePhoto, StopType, ParkingLocation } from '@/types/route';
+import { VenueDetails, VenuePhoto, StopType, ParkingLocation, RouteStop } from '@/types/route';
 import { extractParkingInfo } from './parking-detection';
+import uuid from 'react-native-uuid';
 
 // Use the same API key as Google Maps (should have Places API enabled)
 const GOOGLE_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -156,7 +157,7 @@ export async function searchNearbyPlaces(
     locationBias: {
       circle: {
         center: { latitude, longitude },
-        radius: radiusMeters,
+        radius: Math.min(radiusMeters, 50000),
       },
     },
     pageSize: 20,
@@ -475,6 +476,46 @@ export function isGooglePlacesConfigured(): boolean {
 }
 
 /**
+ * Infer a StopType from Google Places type strings
+ */
+export function inferStopTypeFromGoogleTypes(googleTypes: string[]): StopType {
+  const typeSet = new Set(googleTypes);
+  if (typeSet.has('restaurant')) return 'restaurant';
+  if (typeSet.has('cafe')) return 'cafe';
+  if (typeSet.has('bar')) return 'bar';
+  if (typeSet.has('park') || typeSet.has('national_park')) return 'park';
+  if (typeSet.has('museum') || typeSet.has('art_gallery')) return 'museum';
+  if (typeSet.has('movie_theater') || typeSet.has('performing_arts_theater')) return 'theater';
+  if (typeSet.has('tourist_attraction') || typeSet.has('scenic_lookout')) return 'viewpoint';
+  if (typeSet.has('shopping_mall') || typeSet.has('clothing_store') || typeSet.has('book_store')) return 'shopping';
+  return 'activity';
+}
+
+/**
+ * Convert a Google Place result directly into a RouteStop
+ */
+export function googlePlaceToRouteStop(place: GooglePlaceNew, order: number): RouteStop {
+  const stopType = inferStopTypeFromGoogleTypes(place.types || []);
+  const durations: Record<StopType, number> = {
+    restaurant: 90, cafe: 45, bar: 60, park: 45,
+    museum: 90, theater: 120, viewpoint: 30, activity: 60, shopping: 60,
+  };
+  return {
+    id: uuid.v4() as string,
+    name: place.displayName.text,
+    type: stopType,
+    description: place.editorialSummary?.text || `A ${stopType} in the area`,
+    address: place.formattedAddress || '',
+    latitude: place.location?.latitude ?? 0,
+    longitude: place.location?.longitude ?? 0,
+    duration: durations[stopType] || 60,
+    order,
+    venueDetails: mapGooglePlaceToVenueDetails(place),
+    validationStatus: 'verified',
+  };
+}
+
+/**
  * Search for parking near a venue location
  *
  * @param latitude - Venue latitude
@@ -531,9 +572,9 @@ export async function searchParkingNearVenue(
 }
 
 /**
- * Calculate distance between two coordinates in kilometers
+ * Calculate distance between two coordinates in kilometers (haversine)
  */
-function calculateDistance(
+export function calculateDistance(
   lat1: number,
   lon1: number,
   lat2: number,

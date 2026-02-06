@@ -19,6 +19,7 @@ export class RouteOptimizationService {
   private currentController: AbortController | null = null;
   private isRunning = false;
   private currentState: OptimizationState = 'idle';
+  private optimizationId = 0;
 
   /**
    * Optimize a route with automatic cancellation of previous optimization
@@ -32,6 +33,9 @@ export class RouteOptimizationService {
 
     // Cancel any existing optimization
     this.cancel();
+
+    // Track which optimization call owns the state
+    const myId = ++this.optimizationId;
 
     // Create new abort controller
     this.currentController = new AbortController();
@@ -59,8 +63,12 @@ export class RouteOptimizationService {
       console.error('❌ [OptimizationService] Optimization failed:', error);
       throw error;
     } finally {
-      this.isRunning = false;
-      this.currentController = null;
+      // Only clean up if this is still the active optimization
+      // Prevents stale finally block from corrupting a newer optimization's state
+      if (this.optimizationId === myId) {
+        this.isRunning = false;
+        this.currentController = null;
+      }
     }
   }
 

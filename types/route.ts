@@ -9,6 +9,18 @@ export type StopType =
   | 'activity'
   | 'shopping';
 
+export interface RoutePlanStop {
+  searchQuery: string;
+  type: StopType;
+  description: string;
+  order: number;
+}
+
+export interface RoutePlan {
+  title: string;
+  stops: RoutePlanStop[];
+}
+
 /**
  * Citation from web search results for a venue
  */
@@ -105,6 +117,13 @@ export interface Route {
   stops: RouteStop[];
   createdAt: string;
   segments?: RouteSegment[]; // route segments with travel modes
+  originalPrompt?: string;
+  generationOptions?: {
+    userLocation?: UserLocation;
+    locationContext?: string;
+    maxDistanceMiles?: number;
+    venueCount?: number;
+  };
 }
 
 export interface MapBounds {

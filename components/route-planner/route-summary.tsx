@@ -29,12 +29,33 @@ export function RouteSummary({ route, onSave, onRegenerate }: RouteSummaryProps)
 
   const handleShare = async () => {
     try {
-      const message = `${route.title}\n\n${route.stops
+      const sortedStops = [...route.stops].sort((a, b) => a.order - b.order);
+
+      const stopsList = sortedStops
         .map(
           (stop, idx) =>
             `${idx + 1}. ${stop.name} (${stop.type})\n   ${stop.address}\n   ${stop.duration} min`
         )
-        .join('\n\n')}`;
+        .join('\n\n');
+
+      let mapsUrl = '';
+      if (sortedStops.length >= 2) {
+        const first = sortedStops[0];
+        const last = sortedStops[sortedStops.length - 1];
+        const middle = sortedStops.slice(1, -1);
+        const origin = `${first.latitude},${first.longitude}`;
+        const destination = `${last.latitude},${last.longitude}`;
+        mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
+        if (middle.length > 0) {
+          const waypoints = middle.map(s => `${s.latitude},${s.longitude}`).join('|');
+          mapsUrl += `&waypoints=${encodeURIComponent(waypoints)}`;
+        }
+      } else if (sortedStops.length === 1) {
+        const stop = sortedStops[0];
+        mapsUrl = `https://www.google.com/maps/search/?api=1&query=${stop.latitude},${stop.longitude}`;
+      }
+
+      const message = `${route.title}\n\n${stopsList}${mapsUrl ? `\n\nView in Google Maps:\n${mapsUrl}` : ''}`;
 
       await Share.share({
         message,

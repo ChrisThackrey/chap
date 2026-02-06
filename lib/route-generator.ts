@@ -8,7 +8,7 @@ import {
   WebSearchCitation,
 } from './openai';
 import { validateAndEnrichStops } from './venue-validator';
-import { Route, RouteStop, UserLocation, VenueCitation } from '@/types/route';
+import { Route, RouteStop, UserLocation, VenueCitation, RoutePlan } from '@/types/route';
 import { ValidationWarning } from '@/types/validation';
 import { containsWebSearchTriggers } from '@/constants/web-search-config';
 import { classifyError } from './error-classifier';
@@ -18,18 +18,8 @@ export interface RouteGenerationOptions {
   userLocation?: UserLocation;
   locationContext?: string; // City, state, zip code context
   maxDistanceMiles?: number; // Maximum search radius for stops (1-100 miles)
-}
-
-export interface SingleVenueOptions {
-  userLocation?: UserLocation;
-  locationContext?: string;
-  existingStops: RouteStop[];
-  maxDistanceMiles?: number;
-}
-
-export interface SingleVenueResult {
-  stop: RouteStop;
-  warnings: ValidationWarning[];
+  venueCount?: number; // Number of stops (2-8, default: 3)
+  pinnedStopNames?: string[]; // Names of pre-pinned stops to avoid duplicating
 }
 
 export interface RouteGenerationResult {
@@ -70,6 +60,52 @@ function extractPromptKeywords(prompt: string): string[] {
   if (uniqueMatches) keywords.push(...uniqueMatches);
 
   return [...new Set(keywords.map(k => k.toLowerCase().replace(/[._]/g, ' ')))];
+}
+
+/**
+ * Check if user prompt explicitly requests multiple venues of same type
+ * e.g., "bar crawl", "coffee shop hopping", "visit 3 museums"
+ */
+function allowsDuplicateTypes(prompt: string): boolean {
+  const lower = prompt.toLowerCase();
+  // Bar crawl patterns
+  if (lower.match(/bar (crawl|hop|hopping)|multiple bars|several bars|\d+ bars/i)) {
+    return true;
+  }
+  // Coffee/cafe patterns
+  if (lower.match(/coffee (shop )?hop|multiple (coffee|cafes)|several (coffee|cafes)|\d+ (coffee|cafes)/i)) {
+    return true;
+  }
+  // Museum patterns
+  if (lower.match(/museum hop|multiple museums|several museums|\d+ museums/i)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Validate that all stops have unique venue types
+ */
+function validateStopTypeUniqueness(stops: Partial<RouteStop>[]): {
+  valid: boolean;
+  duplicates: string[];
+} {
+  const typeCounts = new Map<string, number>();
+
+  stops.forEach(stop => {
+    if (stop.type) {
+      typeCounts.set(stop.type, (typeCounts.get(stop.type) || 0) + 1);
+    }
+  });
+
+  const duplicates = Array.from(typeCounts.entries())
+    .filter(([_, count]) => count > 1)
+    .map(([type, count]) => `${type} (${count}x)`);
+
+  return {
+    valid: duplicates.length === 0,
+    duplicates
+  };
 }
 
 /**
@@ -241,41 +277,6 @@ function getRouteJsonSchema() {
 }
 
 /**
- * Build the JSON schema for single venue generation
- */
-function getSingleVenueJsonSchema() {
-  return {
-    type: 'object' as const,
-    properties: {
-      name: { type: 'string' as const },
-      type: {
-        type: 'string' as const,
-        enum: [
-          'restaurant',
-          'cafe',
-          'bar',
-          'park',
-          'museum',
-          'theater',
-          'viewpoint',
-          'activity',
-          'shopping',
-        ],
-      },
-      description: { type: 'string' as const },
-      atmosphereKeywords: {
-        type: 'array' as const,
-        items: { type: 'string' as const },
-      },
-      address: { type: 'string' as const },
-      duration: { type: 'number' as const },
-    },
-    required: ['name', 'type', 'description', 'atmosphereKeywords', 'address', 'duration'],
-    additionalProperties: false,
-  };
-}
-
-/**
  * Generate route using Responses API with web search
  */
 async function generateRouteWithWebSearch(
@@ -310,40 +311,6 @@ async function generateRouteWithWebSearch(
 }
 
 /**
- * Generate single venue using Responses API with web search
- */
-async function generateSingleVenueWithWebSearch(
-  systemPrompt: string,
-  userPrompt: string,
-  locationContext?: string
-): Promise<{ venueData: any; citations: VenueCitation[]; webSearchUsed: boolean }> {
-  const parsedLocation = parseLocationContext(locationContext);
-
-  const response = await createResponseWithSearch({
-    input: `${systemPrompt}\n\nUser request: ${userPrompt}`,
-    locationContext: {
-      city: parsedLocation.city,
-      region: parsedLocation.region,
-      country: 'US',
-    },
-    enableWebSearch: true,
-    jsonSchema: {
-      name: 'single_venue',
-      schema: getSingleVenueJsonSchema(),
-    },
-  });
-
-  const venueData = JSON.parse(response.outputText || '{}');
-  const citations = convertCitations(response.citations);
-
-  return {
-    venueData,
-    citations,
-    webSearchUsed: response.webSearchUsed,
-  };
-}
-
-/**
  * Generate route using standard Chat Completions API (fallback)
  */
 async function generateRouteWithChatCompletions(
@@ -353,7 +320,7 @@ async function generateRouteWithChatCompletions(
 ): Promise<{ routeData: any }> {
   const response = await openai.chat.completions.create({
     model,
-    temperature: 0.9,
+    temperature: 0.7,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
@@ -372,35 +339,6 @@ async function generateRouteWithChatCompletions(
   return { routeData };
 }
 
-/**
- * Generate single venue using standard Chat Completions API (fallback)
- */
-async function generateSingleVenueWithChatCompletions(
-  systemPrompt: string,
-  userPrompt: string,
-  model: string = MODEL
-): Promise<{ venueData: any }> {
-  const response = await openai.chat.completions.create({
-    model,
-    temperature: 0.9,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    response_format: {
-      type: 'json_schema',
-      json_schema: {
-        name: 'single_venue',
-        strict: true,
-        schema: getSingleVenueJsonSchema(),
-      },
-    },
-  });
-
-  const venueData = JSON.parse(response.choices[0].message.content || '{}');
-  return { venueData };
-}
-
 export async function generateRoute(
   prompt: string,
   options?: RouteGenerationOptions
@@ -408,6 +346,7 @@ export async function generateRoute(
   const userLocation = options?.userLocation;
   const locationContext = options?.locationContext;
   const maxDistanceMiles = options?.maxDistanceMiles || 25;
+  const venueCount = options?.venueCount || 3;
 
   // Parse prompt for specific requirements
   const venueKeywords = parsePromptForVenueTypes(prompt);
@@ -473,24 +412,47 @@ ${getGeographicGuidance(maxDistanceMiles)}`
     intentNotes += `\n\nIMPORTANT: The user wants UNIQUE/UNUSUAL venues. Prioritize quirky, unconventional, or one-of-a-kind spots. Avoid generic chain restaurants or typical tourist spots.`;
   }
 
+  // Add pinned stops avoidance note
+  const pinnedStopNames = options?.pinnedStopNames;
+  const pinnedNote = pinnedStopNames && pinnedStopNames.length > 0
+    ? `\n\nIMPORTANT: The user has already chosen these specific venues: ${pinnedStopNames.join(', ')}. Do NOT suggest these venues. Generate ${venueCount} ADDITIONAL complementary stops.`
+    : '';
+
   // Add extracted keywords to help with matching
   const keywordsNote = promptKeywords.length > 0
     ? `\n\nKEY TERMS FROM USER REQUEST: ${promptKeywords.join(', ')}
 Make sure each venue directly relates to at least one of these terms.`
     : '';
 
-  const systemPrompt = `You are a local expert with DEEP knowledge of REAL venues, including hidden gems, neighborhood favorites, and lesser-known spots - not just the popular tourist destinations. Generate a date route with 3-5 stops that EXACTLY matches what the user is asking for.
+  // Check if user explicitly allows duplicate types (e.g., bar crawl)
+  const allowDuplicates = allowsDuplicateTypes(prompt);
+  const diversityRule = allowDuplicates
+    ? `5. VARIETY in venue types - prioritize diverse experiences while respecting the user's request for multiple similar venues if specified`
+    : `5. STRICT NO-DUPLICATE-TYPES RULE:
+   - Each stop MUST have a DIFFERENT "type" value. NEVER repeat the same type.
+   - Available types: restaurant, cafe, bar, park, museum, theater, viewpoint, activity, shopping
+   - Plan the route as a sequence of DISTINCT experiences FIRST (e.g., "dinner → drinks → activity"), then pick one venue per experience.
+   - BAD: 2 restaurants (e.g., dinner + dessert both as "restaurant") — REJECTED
+   - GOOD: 1 restaurant (dinner) + 1 cafe (dessert) + 1 bar (drinks) — each type used once
+   - If the user mentions only food/dining, supplement with complementary experiences (a walk in a park, drinks at a bar, a cafe for dessert) to create a complete outing.`;
 
-${locationPrompt}${intentNotes}${keywordsNote}
+  const systemPrompt = `You are a local expert with DEEP knowledge of REAL venues, including hidden gems, neighborhood favorites, and lesser-known spots - not just the popular tourist destinations. Generate a date route with EXACTLY ${venueCount} stops that match what the user is asking for.
+
+${locationPrompt}${intentNotes}${keywordsNote}${pinnedNote}
 
 USER'S REQUEST: "${prompt}"
+
+STEP 1 — PLAN DISTINCT EXPERIENCES:
+Before picking venues, decide what ROLE each stop plays in the outing. Each stop must serve a DIFFERENT purpose (e.g., dinner, drinks, dessert, entertainment, a stroll). The user's prompt is the primary guide — build the plan around what they asked for, then fill remaining stops with complementary experiences.
+
+STEP 2 — PICK ONE REAL VENUE PER EXPERIENCE:
 
 CRITICAL RULES:
 1. ONLY suggest REAL venues that actually exist - names must be searchable on Google Maps
 2. Each venue MUST have a real street address (number, street, city, state, zip)
 3. DIRECTLY address what the user asked for - if they want tacos, suggest REAL taco restaurants; if they want craft beer, suggest REAL craft breweries/taprooms
 4. GEOGRAPHIC DIVERSITY IS MANDATORY - venues must be spread across different neighborhoods/areas
-5. VARIETY in venue types - don't suggest 3 similar bars or 3 similar restaurants
+${diversityRule}
 6. Mix popularity levels - include some well-known spots AND some hidden gems/local favorites
 
 Each stop must include:
@@ -510,62 +472,92 @@ VENUE SELECTION STRATEGY:
 - Create a logical route that flows geographically
 - Don't default to the same well-known spots every time - be creative and specific to the request`;
 
-  // Determine whether to use web search
-  const useWebSearch = shouldTriggerWebSearch(prompt);
-  let routeData: any;
-  let citations: VenueCitation[] = [];
-  let webSearchUsed = false;
-
-  if (useWebSearch) {
-    // Try web search first, then fall back to standard generation
-    try {
-      console.log('[RouteGenerator] Using GPT-4o with web search for hidden gem request');
-      const webSearchResult = await generateRouteWithWebSearch(
-        systemPrompt,
-        prompt,
-        locationContext
-      );
-      routeData = webSearchResult.routeData;
-      citations = webSearchResult.citations;
-      webSearchUsed = webSearchResult.webSearchUsed;
-    } catch (webSearchError) {
-      // Classify and log the error
-      const classified = classifyError(webSearchError);
-      console.warn('[RouteGenerator] Web search failed, falling back to GPT-4o:', classified.userMessage);
-
+  // Helper: run LLM generation with fallback chain
+  const runGeneration = async (sysPrompt: string): Promise<{ routeData: any; citations: VenueCitation[]; webSearchUsed: boolean }> => {
+    const useWebSearch = shouldTriggerWebSearch(prompt);
+    if (useWebSearch) {
       try {
-        // Fallback 1: GPT-4o without web search (Chat Completions)
-        console.log('[RouteGenerator] Falling back to GPT-4o Chat Completions');
-        const fallbackResult = await generateRouteWithChatCompletions(systemPrompt, prompt, MODEL);
-        routeData = fallbackResult.routeData;
-      } catch (_gpt5Error) {
-        // Fallback 2: GPT-4o as last resort
+        console.log('[RouteGenerator] Using GPT-4o with web search for hidden gem request');
+        const webSearchResult = await generateRouteWithWebSearch(sysPrompt, prompt, locationContext);
+        return { routeData: webSearchResult.routeData, citations: webSearchResult.citations, webSearchUsed: webSearchResult.webSearchUsed };
+      } catch (webSearchError) {
+        const classified = classifyError(webSearchError);
+        console.warn('[RouteGenerator] Web search failed, falling back to GPT-4o:', classified.userMessage);
+        try {
+          console.log('[RouteGenerator] Falling back to GPT-4o Chat Completions');
+          const fallbackResult = await generateRouteWithChatCompletions(sysPrompt, prompt, MODEL);
+          return { routeData: fallbackResult.routeData, citations: [], webSearchUsed: false };
+        } catch (_gpt5Error) {
+          console.warn('[RouteGenerator] GPT-4o failed, falling back to GPT-4o');
+          const gpt4oResult = await generateRouteWithChatCompletions(sysPrompt, prompt, FALLBACK_MODEL);
+          return { routeData: gpt4oResult.routeData, citations: [], webSearchUsed: false };
+        }
+      }
+    } else {
+      try {
+        const result = await generateRouteWithChatCompletions(sysPrompt, prompt, MODEL);
+        return { routeData: result.routeData, citations: [], webSearchUsed: false };
+      } catch (_error) {
         console.warn('[RouteGenerator] GPT-4o failed, falling back to GPT-4o');
-        const gpt4oResult = await generateRouteWithChatCompletions(systemPrompt, prompt, FALLBACK_MODEL);
-        routeData = gpt4oResult.routeData;
+        const fallbackResult = await generateRouteWithChatCompletions(sysPrompt, prompt, FALLBACK_MODEL);
+        return { routeData: fallbackResult.routeData, citations: [], webSearchUsed: false };
       }
     }
-  } else {
-    // Standard generation with GPT-4o (Chat Completions)
-    try {
-      const result = await generateRouteWithChatCompletions(systemPrompt, prompt, MODEL);
-      routeData = result.routeData;
-    } catch (_error) {
-      // Fallback to GPT-4o
-      console.warn('[RouteGenerator] GPT-4o failed, falling back to GPT-4o');
-      const fallbackResult = await generateRouteWithChatCompletions(systemPrompt, prompt, FALLBACK_MODEL);
-      routeData = fallbackResult.routeData;
+  };
+
+  // First attempt
+  let genResult = await runGeneration(systemPrompt);
+  let { routeData, citations, webSearchUsed } = genResult;
+
+  // Check for duplicate types — retry once with stricter prompt if found
+  if (!allowDuplicates) {
+    const firstCheck = validateStopTypeUniqueness(routeData.stops);
+    if (!firstCheck.valid) {
+      console.warn('[RouteGenerator] Duplicate types on first attempt:', firstCheck.duplicates, '— retrying with stricter prompt');
+      const usedTypes = routeData.stops.map((s: any) => s.type).join(', ');
+      const retryPrompt = systemPrompt + `\n\nRETRY — PREVIOUS ATTEMPT FAILED. You used these types: [${usedTypes}] which contains duplicates: ${firstCheck.duplicates.join(', ')}. You MUST use a DIFFERENT type for each stop. Do NOT repeat any type value.`;
+      const retryResult = await runGeneration(retryPrompt);
+      const retryCheck = validateStopTypeUniqueness(retryResult.routeData.stops);
+      if (retryCheck.valid) {
+        console.log('[RouteGenerator] Retry succeeded — no duplicate types');
+        routeData = retryResult.routeData;
+        citations = retryResult.citations;
+        webSearchUsed = retryResult.webSearchUsed;
+      } else {
+        console.warn('[RouteGenerator] Retry still has duplicates:', retryCheck.duplicates, '— using retry result anyway');
+        routeData = retryResult.routeData;
+        citations = retryResult.citations;
+        webSearchUsed = retryResult.webSearchUsed;
+      }
     }
   }
 
-  // Enrich stops with real venue data using dynamic Foursquare API search
-  // Pass the extracted keywords for better matching
+  // Enrich stops with real venue data using dynamic API search
+  // Don't pass originalPrompt here — Strategy 0 uses it to search Google with the raw
+  // user text, which returns the SAME top result for every stop (causing duplicates).
+  // Each stop already has a specific AI-generated name, so Strategies 1-3 handle it.
   const validationResult = await validateAndEnrichStops(
     routeData.stops,
     userLocation,
     maxDistanceMiles,
-    promptKeywords
+    promptKeywords,
+    undefined
   );
+
+  // Final uniqueness check for warnings
+  const uniquenessCheck = validateStopTypeUniqueness(routeData.stops);
+  const warnings = [...validationResult.warnings];
+
+  if (!uniquenessCheck.valid && !allowDuplicates) {
+    console.warn('[RouteGenerator] Final route still has duplicate venue types:', uniquenessCheck.duplicates);
+    warnings.push({
+      severity: 'warning',
+      message: `Route contains duplicate venue categories: ${uniquenessCheck.duplicates.join(', ')}. Consider regenerating for better variety.`,
+      suggestedAction: 'Regenerate the route',
+    });
+  } else if (!uniquenessCheck.valid && allowDuplicates) {
+    console.log('[RouteGenerator] Duplicate types allowed by user request:', uniquenessCheck.duplicates);
+  }
 
   // Add web search metadata to stops if citations were found
   const enrichedStops = validationResult.data.map((stop) => ({
@@ -583,168 +575,139 @@ VENUE SELECTION STRATEGY:
 
   return {
     route,
-    warnings: validationResult.warnings,
+    warnings,
   };
 }
 
 /**
- * Generate a single venue based on a description prompt
- * Used for adding stops to an existing route
+ * Build the JSON schema for route plan generation (search queries, not venues)
  */
-export async function generateSingleVenue(
-  prompt: string,
-  options: SingleVenueOptions
-): Promise<SingleVenueResult> {
-  console.log('[generateSingleVenue] Starting with prompt:', prompt);
-  const { userLocation, locationContext, existingStops, maxDistanceMiles = 25 } = options;
-  console.log('[generateSingleVenue] Location context:', locationContext);
-  console.log('[generateSingleVenue] User location:', userLocation);
-  console.log('[generateSingleVenue] Existing stops:', existingStops.length);
-
-  // Build list of existing stop names to avoid duplicates
-  const existingNames = existingStops.map((s) => s.name).join(', ');
-
-  const locationPrompt = locationContext
-    ? `The user is in ${locationContext}. Search within ${maxDistanceMiles} miles.`
-    : userLocation
-    ? `User is at coordinates ${userLocation.latitude}, ${userLocation.longitude}. Search within ${maxDistanceMiles} miles.`
-    : '';
-
-  // Extract keywords from the prompt for better matching
-  const promptKeywords = extractPromptKeywords(prompt);
-  const keywordsNote = promptKeywords.length > 0
-    ? `\nKEY TERMS TO MATCH: ${promptKeywords.join(', ')}`
-    : '';
-
-  const systemPrompt = `You are a local expert finding REAL venues, including hidden gems and local favorites. Find ONE specific venue that matches the user's request.
-
-${locationPrompt}
-
-EXISTING STOPS (do NOT suggest duplicates): ${existingNames || 'None'}
-
-USER'S REQUEST: "${prompt}"${keywordsNote}
-
-CRITICAL RULES:
-1. Suggest exactly ONE real venue that actually exists and is searchable on Google Maps
-2. The venue MUST have a real street address (number, street, city, state, zip)
-3. Do NOT suggest any venue already in the existing stops list
-4. PRIORITIZE venues that specifically match what the user asked for over generally popular places
-5. Consider hidden gems and local favorites, not just tourist spots
-
-Return the venue with:
-- name: The EXACT real name of the venue
-- type: restaurant | cafe | bar | park | museum | theater | viewpoint | activity | shopping
-- description: Why this venue matches what the user wants (be specific about matching features)
-- atmosphereKeywords: 2-4 keywords for the vibe
-- address: FULL street address with number
-- duration: Time in minutes (suggest appropriate duration for venue type)`;
-
-  // Determine whether to use web search
-  const useWebSearch = shouldTriggerWebSearch(prompt);
-  console.log('[generateSingleVenue] Use web search:', useWebSearch);
-  let venueData: any;
-  let citations: VenueCitation[] = [];
-  let webSearchUsed = false;
-
-  if (useWebSearch) {
-    // Try web search first, then fall back to standard generation
-    try {
-      console.log('[generateSingleVenue] Using GPT-4o with web search for single venue');
-      const webSearchResult = await generateSingleVenueWithWebSearch(
-        systemPrompt,
-        prompt,
-        locationContext
-      );
-      venueData = webSearchResult.venueData;
-      citations = webSearchResult.citations;
-      webSearchUsed = webSearchResult.webSearchUsed;
-    } catch (webSearchError) {
-      // Classify and log the error
-      const classified = classifyError(webSearchError);
-      console.warn('[generateSingleVenue] Web search failed:', classified.userMessage);
-      console.warn('[generateSingleVenue] Full web search error:', webSearchError);
-
-      try {
-        // Fallback 1: GPT-4o without web search (Chat Completions)
-        console.log('[generateSingleVenue] Falling back to GPT-4o Chat Completions');
-        const fallbackResult = await generateSingleVenueWithChatCompletions(systemPrompt, prompt, MODEL);
-        venueData = fallbackResult.venueData;
-        console.log('[generateSingleVenue] Fallback to GPT-4o returned venue:', venueData?.name);
-      } catch (gpt4oError) {
-        // Fallback 2: GPT-4o-mini as last resort
-        console.warn('[generateSingleVenue] GPT-4o also failed:', gpt4oError instanceof Error ? gpt4oError.message : gpt4oError);
-        console.log('[generateSingleVenue] Falling back to GPT-4o-mini');
-        const gpt4oMiniResult = await generateSingleVenueWithChatCompletions(systemPrompt, prompt, FALLBACK_MODEL);
-        venueData = gpt4oMiniResult.venueData;
-        console.log('[generateSingleVenue] GPT-4o-mini returned venue:', venueData?.name);
-      }
-    }
-  } else {
-    // Standard generation with GPT-4o (Chat Completions)
-    try {
-      console.log('[generateSingleVenue] Using standard GPT-4o Chat Completions');
-      const result = await generateSingleVenueWithChatCompletions(systemPrompt, prompt, MODEL);
-      venueData = result.venueData;
-      console.log('[generateSingleVenue] GPT-4o returned venue:', venueData?.name);
-    } catch (apiError) {
-      // Fallback to GPT-4o
-      console.warn('[generateSingleVenue] GPT-4o failed:', apiError instanceof Error ? apiError.message : apiError);
-      console.warn('[generateSingleVenue] Falling back to GPT-4o-mini');
-      const fallbackResult = await generateSingleVenueWithChatCompletions(systemPrompt, prompt, FALLBACK_MODEL);
-      venueData = fallbackResult.venueData;
-      console.log('[generateSingleVenue] Fallback returned venue:', venueData?.name);
-    }
-  }
-
-  // Validate and enrich the single stop (order will be set by caller)
-  console.log('[generateSingleVenue] Validating venue data:', JSON.stringify(venueData, null, 2));
-
-  // Ensure required fields are present
-  if (!venueData || !venueData.name) {
-    console.error('[generateSingleVenue] AI returned invalid venue data - missing name');
-    throw new Error('Could not generate a valid venue. Please try a different description.');
-  }
-
-  // Provide defaults for missing fields
-  const stopData = {
-    name: venueData.name,
-    type: venueData.type || 'activity',
-    description: venueData.description || `A ${venueData.type || 'venue'} matching your request`,
-    address: venueData.address || (locationContext ? `${locationContext}` : 'Address to be determined'),
-    atmosphereKeywords: venueData.atmosphereKeywords || [],
-    duration: venueData.duration || 60,
-    order: 1, // Temporary order, will be updated by caller
-  };
-
-  console.log('[generateSingleVenue] Prepared stop data:', JSON.stringify(stopData, null, 2));
-  console.log('[generateSingleVenue] Calling validateAndEnrichStops...');
-
-  // Pass promptKeywords for consistent venue matching with generateRoute
-  let validationResult;
-  try {
-    validationResult = await validateAndEnrichStops([stopData], userLocation, maxDistanceMiles, promptKeywords);
-    console.log('[generateSingleVenue] Validation returned', validationResult.data.length, 'stops');
-  } catch (validationError) {
-    console.error('[generateSingleVenue] Validation threw error:', validationError);
-    const errorMsg = validationError instanceof Error ? validationError.message : 'Validation failed';
-    throw new Error(`Could not validate venue: ${errorMsg}`);
-  }
-
-  if (validationResult.data.length === 0) {
-    console.error('[generateSingleVenue] No valid venue found after validation');
-    const radiusMsg = maxDistanceMiles ? ` within ${maxDistanceMiles} miles` : '';
-    throw new Error(`Could not find a venue matching "${prompt}"${radiusMsg}. Try a different description or increase your search radius.`);
-  }
-
-  // Add web search metadata to the stop
-  const enrichedStop = {
-    ...validationResult.data[0],
-    webSearchUsed,
-    citations: webSearchUsed ? citations : undefined,
-  };
-
+function getRoutePlanJsonSchema() {
   return {
-    stop: enrichedStop,
-    warnings: validationResult.warnings,
+    type: 'object' as const,
+    properties: {
+      title: { type: 'string' as const },
+      stops: {
+        type: 'array' as const,
+        items: {
+          type: 'object' as const,
+          properties: {
+            searchQuery: { type: 'string' as const },
+            type: {
+              type: 'string' as const,
+              enum: [
+                'restaurant', 'cafe', 'bar', 'park', 'museum',
+                'theater', 'viewpoint', 'activity', 'shopping',
+              ],
+            },
+            description: { type: 'string' as const },
+            order: { type: 'number' as const },
+          },
+          required: ['searchQuery', 'type', 'description', 'order'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['title', 'stops'],
+    additionalProperties: false,
   };
 }
+
+/**
+ * Generate a route plan with search queries (lightweight — no venue validation).
+ * Returns categories/queries that the user can browse via Google Places.
+ */
+export async function generateRoutePlan(
+  prompt: string,
+  options?: RouteGenerationOptions
+): Promise<RoutePlan> {
+  const userLocation = options?.userLocation;
+  const locationContext = options?.locationContext;
+  const maxDistanceMiles = options?.maxDistanceMiles || 25;
+  const venueCount = options?.venueCount || 3;
+
+  const venueKeywords = parsePromptForVenueTypes(prompt);
+  const promptKeywords = extractPromptKeywords(prompt);
+
+  const locationPrompt = locationContext
+    ? `The user is in ${locationContext}. Search radius: ${maxDistanceMiles} miles.`
+    : userLocation
+    ? `User is at coordinates ${userLocation.latitude}, ${userLocation.longitude}. Search radius: ${maxDistanceMiles} miles.`
+    : '';
+
+  let intentNotes = '';
+  if ('dancing' in venueKeywords) intentNotes += '\nThe user wants DANCING — include a nightclub or dance venue query.';
+  if ('liveMusic' in venueKeywords) intentNotes += '\nThe user wants LIVE MUSIC — include a live music venue query.';
+  if ('views' in venueKeywords) intentNotes += '\nThe user wants VIEWS — include a rooftop or scenic venue query.';
+  if ('casual' in venueKeywords) intentNotes += '\nPreference: CASUAL/RELAXED vibes.';
+  if ('upscale' in venueKeywords) intentNotes += '\nPreference: UPSCALE experiences.';
+  if ('hiddenGem' in venueKeywords) intentNotes += '\nThe user wants HIDDEN GEMS — favor lesser-known spots.';
+  if ('unique' in venueKeywords) intentNotes += '\nThe user wants UNIQUE/UNUSUAL venues.';
+
+  const pinnedStopNames = options?.pinnedStopNames;
+  const pinnedNote = pinnedStopNames && pinnedStopNames.length > 0
+    ? `\nThe user has already chosen: ${pinnedStopNames.join(', ')}. Do NOT duplicate these. Generate ${venueCount} ADDITIONAL complementary stops.`
+    : '';
+
+  const keywordsNote = promptKeywords.length > 0
+    ? `\nKey terms: ${promptKeywords.join(', ')}`
+    : '';
+
+  const allowDuplicates = allowsDuplicateTypes(prompt);
+  const diversityNote = allowDuplicates
+    ? ''
+    : '\nEach stop MUST have a DIFFERENT type. Never repeat the same type.';
+
+  const systemPrompt = `You are a local expert planning an outing. Generate EXACTLY ${venueCount} stop categories as Google Places search queries.
+
+${locationPrompt}${intentNotes}${keywordsNote}${pinnedNote}${diversityNote}
+
+USER REQUEST: "${prompt}"
+
+For each stop, return:
+- searchQuery: A specific Google Places text search query that will find great venues matching this category. Include the city/area name. Be specific about cuisine, vibe, or activity type. Example: "upscale Italian restaurant downtown Austin" or "craft cocktail bar with live jazz East Austin".
+- type: restaurant | cafe | bar | park | museum | theater | viewpoint | activity | shopping
+- description: A short sentence explaining why this stop fits the outing (shown to the user).
+- order: Sequential number starting at 1.
+
+The search queries should be specific enough to return relevant Google Places results. Include location context in each query.`;
+
+  const callPlan = async (model: string) => {
+    const response = await openai.chat.completions.create({
+      model,
+      temperature: 0.7,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt },
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'route_plan',
+          strict: true,
+          schema: getRoutePlanJsonSchema(),
+        },
+      },
+    });
+    return JSON.parse(response.choices[0].message.content || '{}');
+  };
+
+  let planData: any;
+  try {
+    planData = await callPlan(MODEL);
+  } catch (_err) {
+    console.warn('[RouteGenerator] Plan generation failed with primary model, trying fallback');
+    planData = await callPlan(FALLBACK_MODEL);
+  }
+
+  return {
+    title: planData.title || 'Your Route',
+    stops: (planData.stops || []).map((s: any, i: number) => ({
+      searchQuery: s.searchQuery,
+      type: s.type,
+      description: s.description,
+      order: s.order ?? i + 1,
+    })),
+  };
+}
+
