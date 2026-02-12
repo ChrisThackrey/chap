@@ -6,12 +6,11 @@ import {
 } from '@/lib/route-generator';
 import { Route, RouteStop, RoutePlan } from '@/types/route';
 import { ValidationWarning } from '@/types/validation';
-import { findOptimalInsertionPosition } from '@/lib/geo-utils';
 import uuid from 'react-native-uuid';
 
 type GenerationState = 'idle' | 'loading' | 'planning' | 'building' | 'success' | 'error';
 
-const MAX_VENUE_COUNT = 8;
+const MAX_VENUE_COUNT = 20;
 
 export function useRouteGeneration() {
   const [state, setState] = useState<GenerationState>('idle');
@@ -85,7 +84,7 @@ export function useRouteGeneration() {
           order: stop.order > stopToRemove.order ? stop.order - 1 : stop.order,
         }));
 
-        return { ...currentRoute, stops: reorderedStops };
+        return { ...currentRoute, stops: reorderedStops, segments: undefined };
       });
     } catch (error) {
       console.error('[RemoveStop] Error:', error);
@@ -102,25 +101,6 @@ export function useRouteGeneration() {
     setWarnings([]);
     setError(null);
   };
-
-  const addSpecificStop = useCallback((newStop: RouteStop) => {
-    if (!route) return;
-    if (route.stops.length >= MAX_VENUE_COUNT) return;
-    if (newStop.latitude === 0 && newStop.longitude === 0) return;
-
-    const sorted = [...route.stops].sort((a, b) => a.order - b.order);
-    const existingCoords = sorted.map(s => ({ latitude: s.latitude, longitude: s.longitude }));
-    const optimalOrder = findOptimalInsertionPosition(existingCoords, {
-      latitude: newStop.latitude,
-      longitude: newStop.longitude,
-    });
-
-    const shiftedStops = sorted.map(s =>
-      s.order >= optimalOrder ? { ...s, order: s.order + 1 } : s
-    );
-    const stopWithOrder = { ...newStop, order: optimalOrder };
-    setRoute({ ...route, stops: [...shiftedStops, stopWithOrder] });
-  }, [route]);
 
   const createRouteFromStops = useCallback((stops: RouteStop[], title: string, options?: RouteGenerationOptions, originalPrompt?: string) => {
     setState('success');
@@ -156,7 +136,6 @@ export function useRouteGeneration() {
     reset,
     loadRoute,
     // Add stop
-    addSpecificStop,
     canAddStop,
     // Create route from stops
     createRouteFromStops,

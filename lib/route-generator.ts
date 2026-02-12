@@ -335,7 +335,8 @@ async function generateRouteWithChatCompletions(
     },
   });
 
-  const routeData = JSON.parse(response.choices[0].message.content || '{}');
+  const content = response.choices?.[0]?.message?.content;
+  const routeData = JSON.parse(content || '{}');
   return { routeData };
 }
 
@@ -355,20 +356,20 @@ export async function generateRoute(
   // Build geographic diversity instructions based on radius
   const getGeographicGuidance = (radius: number): string => {
     if (radius <= 10) {
-      return `PROXIMITY (${radius}-mile radius):
-- Keep ALL venues close together — same neighborhood or adjacent neighborhoods
-- Minimize driving/walking between stops
-- A compact, walkable route is ideal`;
+      return `PROGRESSIVE DISTANCE (${radius}-mile radius):
+- Stop 1: Explore the FULL ${radius}-mile radius — pick the best match anywhere in range
+- Stop 2+: Prefer venues progressively closer to the previous stop
+- The route should naturally tighten as stops are added, but venue quality always comes first`;
     } else if (radius <= 25) {
-      return `PROXIMITY (${radius}-mile radius):
-- Cluster venues in a compact area — minimize total travel time between stops
-- Short drives between stops are preferred over geographic spread
-- Each stop should flow naturally to the next without backtracking`;
+      return `PROGRESSIVE DISTANCE (${radius}-mile radius):
+- Stop 1: Explore the FULL ${radius}-mile radius — find the best match anywhere in range
+- Stop 2+: Prefer venues progressively closer to the previous stop, narrowing the search area
+- Each stop should flow naturally from the last without backtracking`;
     } else {
-      return `PROXIMITY (${radius}-mile radius — road trip):
-- Plan stops along a LOGICAL driving route — avoid backtracking
-- Each stop should be roughly on the way to the next
-- This is a road trip, so linear progress is more important than clustering`;
+      return `PROGRESSIVE DISTANCE (${radius}-mile radius — road trip):
+- Stop 1: Explore the FULL ${radius}-mile radius for the best opening venue
+- Stop 2+: Each subsequent stop should be closer to the previous one
+- Plan stops along a LOGICAL driving route — avoid backtracking`;
     }
   };
 
@@ -450,7 +451,7 @@ CRITICAL RULES:
 1. ONLY suggest REAL venues that actually exist - names must be searchable on Google Maps
 2. Each venue MUST have a real street address (number, street, city, state, zip)
 3. DIRECTLY address what the user asked for - if they want tacos, suggest REAL taco restaurants; if they want craft beer, suggest REAL craft breweries/taprooms
-4. PROXIMITY IS IMPORTANT - venues should be close together for a practical outing. Minimize total driving/walking time between stops.
+4. PROGRESSIVE DISTANCE - Stop 1 should be the best match anywhere in the search radius. Each subsequent stop should prefer venues closer to the previous stop, naturally narrowing the route. Venue quality and relevance always take priority over distance.
 ${diversityRule}
 6. Mix popularity levels - include some well-known spots AND some hidden gems/local favorites
 
@@ -467,8 +468,9 @@ Each stop must include:
 VENUE SELECTION STRATEGY:
 - Prioritize venues that SPECIFICALLY match the user's request over generally popular places
 - Include at least one "hidden gem" or "local favorite" that tourists might not know
-- Keep stops geographically close when possible — a compact route is better than a spread-out one
-- Create a route where each stop flows naturally to the next without backtracking
+- Stop 1 should explore the full search radius — pick the best match regardless of where it is
+- Stops 2+ should progressively favor venues closer to the previous stop, creating a natural narrowing effect
+- Create a route where each stop flows naturally from the last without backtracking
 - Don't default to the same well-known spots every time - be creative and specific to the request`;
 
   // Helper: run LLM generation with fallback chain
@@ -670,7 +672,7 @@ For each stop, return:
 - order: Sequential number starting at 1.
 
 The search queries should be specific enough to return relevant Google Places results. Include location context in each query.
-Search queries should target the SAME general area/neighborhood for a practical, compact outing. Avoid spreading stops across distant parts of the city.`;
+The first search query can target anywhere within the search radius. Later queries should progressively favor venues closer to where the previous stop would be located.`;
 
   const callPlan = async (model: string) => {
     const response = await openai.chat.completions.create({
@@ -689,7 +691,8 @@ Search queries should target the SAME general area/neighborhood for a practical,
         },
       },
     });
-    return JSON.parse(response.choices[0].message.content || '{}');
+    const content = response.choices?.[0]?.message?.content;
+    return JSON.parse(content || '{}');
   };
 
   let planData: any;
@@ -703,11 +706,11 @@ Search queries should target the SAME general area/neighborhood for a practical,
   return {
     title: planData.title || 'Your Route',
     stops: (planData.stops || []).map((s: any, i: number) => ({
-      searchQuery: s.searchQuery,
-      type: s.type,
-      description: s.description,
+      searchQuery: s.searchQuery || '',
+      type: s.type || 'activity',
+      description: s.description || '',
       order: s.order ?? i + 1,
-    })),
+    })).filter((s: any) => s.searchQuery.length > 0),
   };
 }
 

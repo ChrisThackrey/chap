@@ -69,8 +69,8 @@ const MAX_RADIUS = 100;
 // Colors for different interaction states
 const CIRCLE_COLORS = {
   default: {
-    stroke: MapColors.radius.stroke,
-    fill: MapColors.radius.fill,
+    stroke: MapColors.light.radius.stroke,
+    fill: MapColors.light.radius.fill,
   },
   active: {
     stroke: `${tailwind.emerald500}CC`, // Green with 80% opacity for dragging
@@ -441,7 +441,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 60,
     alignSelf: 'center',
-    backgroundColor: MapColors.label.background,
+    backgroundColor: MapColors.light.label.background,
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 24,

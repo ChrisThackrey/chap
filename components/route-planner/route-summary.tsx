@@ -72,7 +72,7 @@ export function RouteSummary({ route, onSave, onRegenerate }: RouteSummaryProps)
   };
 
   return (
-    <ThemedView style={styles.container}>
+    <ThemedView style={[styles.container, { borderBottomColor: colors.border }]}>
       <View style={styles.header}>
         <ThemedText type="title" style={styles.title}>
           {route.title}
@@ -82,17 +82,17 @@ export function RouteSummary({ route, onSave, onRegenerate }: RouteSummaryProps)
         <View style={styles.badgesRow}>
           <View style={styles.validationBadges}>
             {verifiedCount > 0 && (
-              <View style={[styles.badge, styles.verifiedBadge]}>
+              <View style={[styles.badge, styles.verifiedBadge, colorScheme === 'dark' && { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
                 <ThemedText style={styles.badgeText}>✓ {verifiedCount} verified</ThemedText>
               </View>
             )}
             {geocodedCount > 0 && (
-              <View style={[styles.badge, styles.geocodedBadge]}>
+              <View style={[styles.badge, styles.geocodedBadge, colorScheme === 'dark' && { backgroundColor: 'rgba(59, 130, 246, 0.15)' }]}>
                 <ThemedText style={styles.badgeText}>◉ {geocodedCount} geocoded</ThemedText>
               </View>
             )}
             {approximateCount > 0 && (
-              <View style={[styles.badge, styles.approximateBadge]}>
+              <View style={[styles.badge, styles.approximateBadge, colorScheme === 'dark' && { backgroundColor: 'rgba(245, 158, 11, 0.15)' }]}>
                 <ThemedText style={styles.badgeText}>~ {approximateCount} approximate</ThemedText>
               </View>
             )}

@@ -19,12 +19,35 @@ import {
   GooglePlaceNew,
   calculateDistance,
 } from '@/lib/google-places';
-import { generateRoutePlan } from '@/lib/route-generator';
-import { Route, RouteStop } from '@/types/route';
-import { tailwind } from '@/constants/theme';
+import { Route, RouteStop, StopType } from '@/types/route';
+import { STOP_ICON_MAPPING } from '@/constants/stop-icons';
+import { Colors, tailwind } from '@/constants/theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
 import { SuggestionCard } from './suggestion-card';
 
-type Phase = 'loading' | 'results' | 'manual' | 'searching';
+type Phase = 'idle' | 'searching' | 'results';
+
+const ALL_STOP_TYPES: StopType[] = [
+  'cafe', 'bar', 'restaurant', 'park', 'museum',
+  'activity', 'theater', 'viewpoint', 'shopping',
+];
+
+const SEARCH_QUERY_BY_TYPE: Record<StopType, string> = {
+  restaurant: 'restaurant',
+  cafe: 'coffee shop',
+  bar: 'bar',
+  park: 'park',
+  museum: 'museum',
+  theater: 'theater',
+  viewpoint: 'scenic viewpoint',
+  activity: 'fun activity',
+  shopping: 'shopping stores',
+};
+
+function getComplementaryTypes(stops: RouteStop[]): StopType[] {
+  const existing = new Set(stops.map(s => s.type));
+  return ALL_STOP_TYPES.filter(t => !existing.has(t));
+}
 
 const QUICK_PICKS = [
   { label: 'Coffee', query: 'coffee shop', icon: 'cup.and.saucer.fill' as const, color: '#8B4513' },
@@ -35,11 +58,25 @@ const QUICK_PICKS = [
   { label: 'Activity', query: 'fun activity', icon: 'figure.run' as const, color: '#1ABC9C' },
 ];
 
+/** Filter out places that have no valid location coordinates */
+function filterValidPlaces(places: GooglePlaceNew[]): GooglePlaceNew[] {
+  return places.filter(p =>
+    p.displayName?.text &&
+    p.location &&
+    typeof p.location.latitude === 'number' &&
+    typeof p.location.longitude === 'number' &&
+    !isNaN(p.location.latitude) &&
+    !isNaN(p.location.longitude) &&
+    !(p.location.latitude === 0 && p.location.longitude === 0)
+  );
+}
+
 interface AddStopModalProps {
   visible: boolean;
   route: Route | null;
   searchLocation: { latitude: number; longitude: number } | null;
   radiusMeters: number;
+  maxStops?: number;
   onSelectStop: (stop: RouteStop) => void;
   onDismiss: () => void;
 }
@@ -52,24 +89,22 @@ export function AddStopModal({
   onSelectStop,
   onDismiss,
 }: AddStopModalProps) {
-  const [phase, setPhase] = useState<Phase>('loading');
+  const [phase, setPhase] = useState<Phase>('idle');
   const [places, setPlaces] = useState<GooglePlaceNew[]>([]);
-  const [aiQuery, setAiQuery] = useState('');
-  const [searchLabel, setSearchLabel] = useState('');
   const [customText, setCustomText] = useState('');
   const [selectedChip, setSelectedChip] = useState<number | null>(null);
+  const [lastSearchLabel, setLastSearchLabel] = useState('');
 
-  // Snapshot stops on open to prevent re-renders from changing them
+  const colorScheme = useColorScheme();
+  const colors = Colors[colorScheme ?? 'light'];
+
   const stopsSnapshotRef = useRef<RouteStop[]>([]);
-  const cancelledRef = useRef(false);
-
-  const originalPrompt = route?.originalPrompt;
-  const existingStops = route?.stops;
+  const searchIdRef = useRef(0);
 
   // Compute smart search center from existing stops
   const smartSearchCenter = useMemo(() => {
     if (!searchLocation) return null;
-    const stops = stopsSnapshotRef.current;
+    const stops = route?.stops;
     if (!stops || stops.length < 2) return searchLocation;
 
     const sorted = [...stops].sort((a, b) => a.order - b.order);
@@ -89,44 +124,66 @@ export function AddStopModal({
       }
     }
     return { latitude: gapMidLat, longitude: gapMidLon };
-  }, [searchLocation]);
+  }, [searchLocation, route?.stops]);
 
-  // Rank-blend and slice results
+  // Rank-blend results by relevance (60%) and proximity to existing stops (40%)
   const rankBlendResults = useCallback((results: GooglePlaceNew[], stops: RouteStop[]): GooglePlaceNew[] => {
-    if (!stops || stops.length === 0) return results.slice(0, 5);
+    const valid = filterValidPlaces(results);
+    if (valid.length === 0) return [];
+    if (!stops || stops.length === 0) return valid.slice(0, 10);
 
-    const withRelevanceRank = results.map((r, i) => ({ place: r, relevanceRank: i }));
+    const withRank = valid.map((place, i) => ({ place, relevanceRank: i }));
 
-    const byDistance = [...withRelevanceRank].sort((a, b) => {
-      const distA = a.place.location ? Math.min(...stops.map(s =>
-        calculateDistance(a.place.location!.latitude, a.place.location!.longitude, s.latitude, s.longitude)
-      )) : Infinity;
-      const distB = b.place.location ? Math.min(...stops.map(s =>
-        calculateDistance(b.place.location!.latitude, b.place.location!.longitude, s.latitude, s.longitude)
-      )) : Infinity;
+    const byDistance = [...withRank].sort((a, b) => {
+      const loc = a.place.location!;
+      const distA = Math.min(...stops.map(s =>
+        calculateDistance(loc.latitude, loc.longitude, s.latitude, s.longitude)
+      ));
+      const locB = b.place.location!;
+      const distB = Math.min(...stops.map(s =>
+        calculateDistance(locB.latitude, locB.longitude, s.latitude, s.longitude)
+      ));
       return distA - distB;
     });
-    const distanceRankMap = new Map<string, number>();
-    byDistance.forEach((item, i) => distanceRankMap.set(item.place.id, i));
 
-    return withRelevanceRank
+    const distRankMap = new Map<string, number>();
+    byDistance.forEach((item, i) => distRankMap.set(item.place.id, i));
+
+    return withRank
       .sort((a, b) => {
-        const scoreA = a.relevanceRank * 0.6 + (distanceRankMap.get(a.place.id) ?? results.length) * 0.4;
-        const scoreB = b.relevanceRank * 0.6 + (distanceRankMap.get(b.place.id) ?? results.length) * 0.4;
+        const scoreA = a.relevanceRank * 0.6 + (distRankMap.get(a.place.id) ?? valid.length) * 0.4;
+        const scoreB = b.relevanceRank * 0.6 + (distRankMap.get(b.place.id) ?? valid.length) * 0.4;
         return scoreA - scoreB;
       })
       .map(item => item.place)
-      .slice(0, 5);
+      .slice(0, 10);
   }, []);
 
+  // Reset state when modal opens
+  useEffect(() => {
+    if (!visible) return;
+    setPhase('idle');
+    setPlaces([]);
+    setCustomText('');
+    setSelectedChip(null);
+    setLastSearchLabel('');
+    stopsSnapshotRef.current = route?.stops || [];
+  }, [visible, route?.stops]);
+
   // Search places with a query
-  const searchWithQuery = useCallback(async (query: string) => {
+  const executeSearch = useCallback(async (query: string, label: string) => {
     if (!smartSearchCenter || !isGooglePlacesConfigured()) {
-      setPhase('manual');
+      setPlaces([]);
+      setLastSearchLabel(label);
+      setPhase('results');
       return;
     }
 
+    const thisSearchId = ++searchIdRef.current;
+    setPhase('searching');
+    setLastSearchLabel(label);
     setPlaces([]);
+
     try {
       const results = await searchNearbyPlaces(
         query,
@@ -135,75 +192,36 @@ export function AddStopModal({
         radiusMeters,
       );
 
-      if (cancelledRef.current) return;
-
-      if (results.length === 0) {
-        setPhase('manual');
-        return;
-      }
+      if (searchIdRef.current !== thisSearchId) return; // stale, discard
 
       const sorted = rankBlendResults(results, stopsSnapshotRef.current);
       setPlaces(sorted);
       setPhase('results');
     } catch (err) {
       console.error('[AddStopModal] Search error:', err);
-      if (!cancelledRef.current) setPhase('manual');
+      if (searchIdRef.current !== thisSearchId) return;
+      setPlaces([]);
+      setPhase('results');
     }
   }, [smartSearchCenter, radiusMeters, rankBlendResults]);
 
-  // Main effect: on open, decide AI vs manual
-  useEffect(() => {
-    if (!visible) return;
-
-    // Snapshot current stops
-    stopsSnapshotRef.current = existingStops || [];
-    cancelledRef.current = false;
-    setPlaces([]);
-    setCustomText('');
+  // Handle complementary type chip press
+  const handleComplementaryChipPress = useCallback((type: StopType) => {
+    const query = SEARCH_QUERY_BY_TYPE[type];
+    const label = type.charAt(0).toUpperCase() + type.slice(1);
     setSelectedChip(null);
-    setAiQuery('');
-    setSearchLabel('');
-
-    // If no original prompt or no Google Places, go straight to manual
-    if (!originalPrompt || !searchLocation || !isGooglePlacesConfigured()) {
-      setPhase('manual');
-      return;
-    }
-
-    // AI-driven flow
-    setPhase('loading');
-
-    (async () => {
-      try {
-        const existingNames = stopsSnapshotRef.current.map(s => s.name);
-        const plan = await generateRoutePlan(originalPrompt, {
-          venueCount: 1,
-          pinnedStopNames: existingNames.length > 0 ? existingNames : undefined,
-        });
-
-        if (cancelledRef.current) return;
-
-        if (!plan.stops || plan.stops.length === 0) {
-          setPhase('manual');
-          return;
-        }
-
-        const query = plan.stops[0].searchQuery;
-        setAiQuery(query);
-        await searchWithQuery(query);
-      } catch (err) {
-        console.error('[AddStopModal] AI suggestion error:', err);
-        if (!cancelledRef.current) setPhase('manual');
-      }
-    })();
-
-    return () => { cancelledRef.current = true; };
-  }, [visible, originalPrompt, searchLocation, existingStops, searchWithQuery]);
+    setCustomText('');
+    executeSearch(query, label);
+  }, [executeSearch]);
 
   const handleSelect = useCallback((place: GooglePlaceNew) => {
-    const stop = googlePlaceToRouteStop(place, 0);
-    if (!stop) return;
-    onSelectStop(stop);
+    try {
+      const stop = googlePlaceToRouteStop(place, 0);
+      if (!stop) return;
+      onSelectStop(stop);
+    } catch (err) {
+      console.error('[AddStopModal] Failed to convert place to stop:', err);
+    }
   }, [onSelectStop]);
 
   const handleManualSearch = useCallback(async () => {
@@ -215,11 +233,8 @@ export function AddStopModal({
       : customText.trim();
 
     if (!query) return;
-
-    setSearchLabel(label);
-    setPhase('searching');
-    await searchWithQuery(query);
-  }, [selectedChip, customText, searchWithQuery]);
+    executeSearch(query, label);
+  }, [selectedChip, customText, executeSearch]);
 
   const handleChipPress = (index: number) => {
     setSelectedChip(index);
@@ -231,7 +246,113 @@ export function AddStopModal({
     if (text.length > 0) setSelectedChip(null);
   };
 
+  const handleBackToIdle = () => {
+    setPhase('idle');
+    setPlaces([]);
+    setLastSearchLabel('');
+  };
+
   const canSearch = selectedChip !== null || customText.trim().length > 0;
+
+  const getNearestStop = (place: GooglePlaceNew) => {
+    const stops = stopsSnapshotRef.current;
+    let nearestDist: number | undefined;
+    let nearestName: string | undefined;
+    if (place.location && stops.length > 0) {
+      for (const s of stops) {
+        const d = calculateDistance(
+          place.location.latitude, place.location.longitude,
+          s.latitude, s.longitude
+        ) * 0.621371;
+        if (nearestDist === undefined || d < nearestDist) {
+          nearestDist = d;
+          nearestName = s.name;
+        }
+      }
+    }
+    return { nearestDist, nearestName };
+  };
+
+  const complementaryTypes = useMemo(() => {
+    return getComplementaryTypes(stopsSnapshotRef.current);
+  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Shared UI pieces ──────────────────────────────────────────────────
+
+  const renderQuickPicks = () => (
+    <View style={styles.quickPicksSection}>
+      <ThemedText style={styles.sectionLabel}>Quick pick</ThemedText>
+      <View style={styles.chipGrid}>
+        {QUICK_PICKS.map((pick, index) => {
+          const isSelected = selectedChip === index;
+          return (
+            <TouchableOpacity
+              key={pick.label}
+              style={[
+                styles.chip,
+                isSelected && { backgroundColor: pick.color, borderColor: pick.color },
+                !isSelected && { backgroundColor: colors.surface, borderColor: colors.border },
+              ]}
+              onPress={() => handleChipPress(index)}
+              activeOpacity={0.7}
+            >
+              <IconSymbol
+                name={pick.icon}
+                size={18}
+                color={isSelected ? '#FFFFFF' : pick.color}
+              />
+              <ThemedText
+                style={[styles.chipLabel, isSelected && styles.chipLabelSelected]}
+              >
+                {pick.label}
+              </ThemedText>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      <View style={styles.dividerRow}>
+        <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
+        <ThemedText style={styles.dividerText}>or describe what you want</ThemedText>
+        <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
+      </View>
+
+      <TextInput
+        style={[styles.textInput, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }]}
+        placeholder="e.g. a rooftop bar with great views"
+        placeholderTextColor={tailwind.gray400}
+        value={customText}
+        onChangeText={handleTextChange}
+        returnKeyType="search"
+        onSubmitEditing={canSearch ? handleManualSearch : undefined}
+      />
+
+      <TouchableOpacity
+        style={[styles.searchButton, !canSearch && styles.searchButtonDisabled]}
+        onPress={handleManualSearch}
+        disabled={!canSearch}
+        activeOpacity={0.8}
+      >
+        <IconSymbol name="magnifyingglass" size={20} color="#FFFFFF" />
+        <ThemedText style={styles.searchButtonText}>Search Nearby</ThemedText>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderPlaceCard = (place: GooglePlaceNew) => {
+    const { nearestDist, nearestName } = getNearestStop(place);
+    return (
+      <SuggestionCard
+        key={place.id}
+        place={place}
+        onSelect={handleSelect}
+        nearestStopDistance={nearestDist}
+        nearestStopName={nearestName}
+      />
+    );
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────
 
   return (
     <Modal
@@ -241,24 +362,16 @@ export function AddStopModal({
       onRequestClose={onDismiss}
     >
       <KeyboardAvoidingView
-        style={styles.container}
+        style={[styles.container, { backgroundColor: colors.background }]}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        {/* Header */}
-        <View style={styles.header}>
-          <View>
+        {/* ── Header ── */}
+        <View style={[styles.header, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
+          <View style={styles.headerTextWrap}>
             <ThemedText style={styles.title}>Add a Stop</ThemedText>
-            {phase === 'results' && searchLabel ? (
+            {phase === 'results' && lastSearchLabel ? (
               <ThemedText style={styles.subtitle} numberOfLines={1}>
-                Showing: &ldquo;{searchLabel}&rdquo;
-              </ThemedText>
-            ) : phase === 'results' && aiQuery ? (
-              <ThemedText style={styles.subtitle} numberOfLines={1}>
-                AI suggested: &ldquo;{aiQuery}&rdquo;
-              </ThemedText>
-            ) : phase === 'loading' ? (
-              <ThemedText style={styles.subtitle}>
-                Finding a great addition...
+                Showing: &ldquo;{lastSearchLabel}&rdquo;
               </ThemedText>
             ) : null}
           </View>
@@ -267,17 +380,7 @@ export function AddStopModal({
           </TouchableOpacity>
         </View>
 
-        {/* Loading phase */}
-        {phase === 'loading' && (
-          <View style={styles.centeredState}>
-            <ActivityIndicator size="large" color={tailwind.blue500} />
-            <ThemedText style={styles.stateText}>
-              Asking AI for the perfect next stop...
-            </ThemedText>
-          </View>
-        )}
-
-        {/* Searching phase (manual search in progress) */}
+        {/* ── Searching ── */}
         {phase === 'searching' && (
           <View style={styles.centeredState}>
             <ActivityIndicator size="large" color={tailwind.blue500} />
@@ -285,171 +388,86 @@ export function AddStopModal({
           </View>
         )}
 
-        {/* Results phase */}
-        {phase === 'results' && places.length > 0 && (
+        {/* ── Idle: complementary suggestions + quick picks ── */}
+        {phase === 'idle' && (
           <ScrollView
             style={styles.scrollArea}
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           >
-            {/* Quick picks + custom search at top */}
-            <ThemedText style={styles.sectionLabel}>Quick pick</ThemedText>
-            <View style={styles.chipGrid}>
-              {QUICK_PICKS.map((pick, index) => {
-                const isSelected = selectedChip === index;
-                return (
-                  <TouchableOpacity
-                    key={pick.label}
-                    style={[
-                      styles.chip,
-                      isSelected && { backgroundColor: pick.color, borderColor: pick.color },
-                    ]}
-                    onPress={() => handleChipPress(index)}
-                    activeOpacity={0.7}
-                  >
-                    <IconSymbol
-                      name={pick.icon}
-                      size={18}
-                      color={isSelected ? '#FFFFFF' : pick.color}
-                    />
-                    <ThemedText
-                      style={[styles.chipLabel, isSelected && styles.chipLabelSelected]}
-                    >
-                      {pick.label}
-                    </ThemedText>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+            {complementaryTypes.length > 0 && (
+              <View style={styles.suggestedSection}>
+                <ThemedText style={styles.sectionLabel}>Suggested for your route</ThemedText>
+                <View style={styles.chipGrid}>
+                  {complementaryTypes.map(type => {
+                    const iconConfig = STOP_ICON_MAPPING[type] || STOP_ICON_MAPPING.activity;
+                    return (
+                      <TouchableOpacity
+                        key={type}
+                        style={[styles.chip, { backgroundColor: colors.surface, borderColor: colors.border }]}
+                        onPress={() => handleComplementaryChipPress(type)}
+                        activeOpacity={0.7}
+                      >
+                        <IconSymbol
+                          name={iconConfig.ios as any}
+                          size={18}
+                          color={iconConfig.color}
+                        />
+                        <ThemedText style={styles.chipLabel}>
+                          {type.charAt(0).toUpperCase() + type.slice(1)}
+                        </ThemedText>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
 
-            <View style={styles.dividerRow}>
-              <View style={styles.dividerLine} />
-              <ThemedText style={styles.dividerText}>or describe what you want</ThemedText>
-              <View style={styles.dividerLine} />
-            </View>
-
-            <TextInput
-              style={styles.textInput}
-              placeholder="e.g. a rooftop bar with great views"
-              placeholderTextColor={tailwind.gray400}
-              value={customText}
-              onChangeText={handleTextChange}
-              returnKeyType="search"
-              onSubmitEditing={canSearch ? handleManualSearch : undefined}
-            />
-
-            <TouchableOpacity
-              style={[styles.searchButton, !canSearch && styles.searchButtonDisabled]}
-              onPress={handleManualSearch}
-              disabled={!canSearch}
-              activeOpacity={0.8}
-            >
-              <IconSymbol name="magnifyingglass" size={20} color="#FFFFFF" />
-              <ThemedText style={styles.searchButtonText}>Search Nearby</ThemedText>
-            </TouchableOpacity>
-
-            {/* Suggestion cards below */}
-            <View style={styles.suggestionsSection}>
-              <ThemedText style={styles.sectionLabel}>Suggestions</ThemedText>
-              {places.map((place) => {
-                const stops = stopsSnapshotRef.current;
-                let nearestDist: number | undefined;
-                let nearestName: string | undefined;
-                if (place.location && stops.length > 0) {
-                  for (const s of stops) {
-                    const d = calculateDistance(
-                      place.location.latitude, place.location.longitude,
-                      s.latitude, s.longitude
-                    ) * 0.621371; // km to miles
-                    if (nearestDist === undefined || d < nearestDist) {
-                      nearestDist = d;
-                      nearestName = s.name;
-                    }
-                  }
-                }
-                return (
-                  <SuggestionCard
-                    key={place.id}
-                    place={place}
-                    onSelect={handleSelect}
-                    nearestStopDistance={nearestDist}
-                    nearestStopName={nearestName}
-                  />
-                );
-              })}
-            </View>
-
+            {renderQuickPicks()}
             <View style={styles.bottomSpacer} />
           </ScrollView>
         )}
 
-        {/* Manual phase */}
-        {phase === 'manual' && (
+        {/* ── Results ── */}
+        {phase === 'results' && (
           <ScrollView
             style={styles.scrollArea}
-            contentContainerStyle={styles.manualContent}
+            contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           >
-            {/* Quick pick chips */}
-            <ThemedText style={styles.sectionLabel}>Quick pick</ThemedText>
-            <View style={styles.chipGrid}>
-              {QUICK_PICKS.map((pick, index) => {
-                const isSelected = selectedChip === index;
-                return (
-                  <TouchableOpacity
-                    key={pick.label}
-                    style={[
-                      styles.chip,
-                      isSelected && { backgroundColor: pick.color, borderColor: pick.color },
-                    ]}
-                    onPress={() => handleChipPress(index)}
-                    activeOpacity={0.7}
-                  >
-                    <IconSymbol
-                      name={pick.icon}
-                      size={18}
-                      color={isSelected ? '#FFFFFF' : pick.color}
-                    />
-                    <ThemedText
-                      style={[styles.chipLabel, isSelected && styles.chipLabelSelected]}
-                    >
-                      {pick.label}
-                    </ThemedText>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+            {renderQuickPicks()}
 
-            {/* Divider */}
-            <View style={styles.dividerRow}>
-              <View style={styles.dividerLine} />
-              <ThemedText style={styles.dividerText}>or describe what you want</ThemedText>
-              <View style={styles.dividerLine} />
-            </View>
-
-            {/* Text input */}
-            <TextInput
-              style={styles.textInput}
-              placeholder="e.g. a rooftop bar with great views"
-              placeholderTextColor={tailwind.gray400}
-              value={customText}
-              onChangeText={handleTextChange}
-              returnKeyType="search"
-              onSubmitEditing={canSearch ? handleManualSearch : undefined}
-            />
-
-            {/* Search button */}
-            <TouchableOpacity
-              style={[styles.searchButton, !canSearch && styles.searchButtonDisabled]}
-              onPress={handleManualSearch}
-              disabled={!canSearch}
-              activeOpacity={0.8}
-            >
-              <IconSymbol name="magnifyingglass" size={20} color="#FFFFFF" />
-              <ThemedText style={styles.searchButtonText}>Search Nearby</ThemedText>
-            </TouchableOpacity>
+            {!isGooglePlacesConfigured() ? (
+              <View style={styles.emptyState}>
+                <IconSymbol name="exclamationmark.triangle" size={32} color={tailwind.gray400} />
+                <ThemedText style={styles.emptyStateTitle}>Search unavailable</ThemedText>
+                <ThemedText style={styles.emptyStateText}>
+                  Google Places is not configured. Please add your API key.
+                </ThemedText>
+              </View>
+            ) : places.length === 0 ? (
+              <View style={styles.emptyState}>
+                <IconSymbol name="magnifyingglass" size={32} color={tailwind.gray400} />
+                <ThemedText style={styles.emptyStateTitle}>No results found</ThemedText>
+                <ThemedText style={styles.emptyStateText}>
+                  Try a different search term or expand your search radius.
+                </ThemedText>
+                <TouchableOpacity
+                  style={styles.tryAgainButton}
+                  onPress={handleBackToIdle}
+                  activeOpacity={0.7}
+                >
+                  <ThemedText style={styles.tryAgainText}>Search again</ThemedText>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.flatResultsSection}>
+                <ThemedText style={styles.sectionLabel}>Results</ThemedText>
+                {places.map(p => renderPlaceCard(p))}
+              </View>
+            )}
 
             <View style={styles.bottomSpacer} />
           </ScrollView>
@@ -462,7 +480,6 @@ export function AddStopModal({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8F9FA',
   },
   header: {
     flexDirection: 'row',
@@ -471,20 +488,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 20,
     paddingBottom: 12,
-    backgroundColor: '#FFFFFF',
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: tailwind.gray200,
+  },
+  headerTextWrap: {
+    flex: 1,
+    marginRight: 12,
   },
   title: {
     fontSize: 22,
     fontWeight: '700',
-    color: tailwind.gray900,
   },
   subtitle: {
     fontSize: 14,
     color: tailwind.gray500,
     marginTop: 2,
-    maxWidth: 260,
   },
   closeBtn: {
     marginTop: 2,
@@ -505,11 +522,19 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    padding: 16,
-    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 0,
   },
-  manualContent: {
-    padding: 20,
+
+  // Suggested section
+  suggestedSection: {
+    marginBottom: 20,
+  },
+
+  // Quick picks section
+  quickPicksSection: {
+    marginBottom: 20,
   },
   sectionLabel: {
     fontSize: 14,
@@ -523,7 +548,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
-    marginBottom: 24,
+    marginBottom: 20,
   },
   chip: {
     flexDirection: 'row',
@@ -533,13 +558,10 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 20,
     borderWidth: 1.5,
-    borderColor: tailwind.gray200,
-    backgroundColor: '#FFFFFF',
   },
   chipLabel: {
     fontSize: 15,
     fontWeight: '600',
-    color: tailwind.gray700,
   },
   chipLabelSelected: {
     color: '#FFFFFF',
@@ -553,7 +575,6 @@ const styles = StyleSheet.create({
   dividerLine: {
     flex: 1,
     height: 1,
-    backgroundColor: tailwind.gray200,
   },
   dividerText: {
     fontSize: 13,
@@ -562,14 +583,11 @@ const styles = StyleSheet.create({
   },
   textInput: {
     borderWidth: 1.5,
-    borderColor: tailwind.gray200,
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 14,
     fontSize: 16,
-    color: tailwind.gray900,
-    marginBottom: 24,
-    backgroundColor: '#FFFFFF',
+    marginBottom: 16,
   },
   searchButton: {
     flexDirection: 'row',
@@ -588,10 +606,43 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
   },
-  suggestionsSection: {
-    marginTop: 8,
-    gap: 12,
+
+  // Empty state
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 32,
+    paddingHorizontal: 24,
+    gap: 8,
   },
+  emptyStateTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  emptyStateText: {
+    fontSize: 14,
+    color: tailwind.gray500,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  tryAgainButton: {
+    marginTop: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: tailwind.blue500,
+  },
+  tryAgainText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+
+  // Flat results
+  flatResultsSection: {
+    gap: 10,
+  },
+
   bottomSpacer: {
     height: 40,
   },

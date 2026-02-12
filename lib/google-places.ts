@@ -364,6 +364,7 @@ export function mapGooglePlaceToVenueDetails(place: GooglePlaceNew): VenueDetail
   // Extract reviews as tips (limit to 3)
   const tips: string[] = (place.reviews || [])
     .slice(0, 3)
+    .filter(review => review.text?.text)
     .map(review => review.text.text);
 
   // Map Google types to categories (filter out generic types)
@@ -498,6 +499,7 @@ export function googlePlaceToRouteStop(place: GooglePlaceNew, order: number): Ro
   const lat = place.location?.latitude ?? 0;
   const lon = place.location?.longitude ?? 0;
   if (lat === 0 && lon === 0) return null;
+  if (!place.displayName?.text) return null;
 
   const stopType = inferStopTypeFromGoogleTypes(place.types || []);
   const durations: Record<StopType, number> = {
@@ -551,7 +553,7 @@ export async function searchParkingNearVenue(
 
     // Return the closest parking location
     const closestPlace = results[0];
-    if (!closestPlace.location) {
+    if (!closestPlace.location || !closestPlace.displayName?.text) {
       return null;
     }
 

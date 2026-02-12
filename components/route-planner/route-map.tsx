@@ -9,7 +9,9 @@ import { NavigationAppSelectorModal, NavigationApp } from './navigation-app-sele
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Route, RouteStop, RouteSegment, TravelMode } from '@/types/route';
 import { RouteCoordinate, fetchCompleteRouteWithSegments } from '@/lib/google-directions';
-import { MapColors, tailwind } from '@/constants/theme';
+import { tailwind } from '@/constants/theme';
+import { useMapColors } from '@/hooks/use-map-colors';
+import { useColorScheme } from '@/hooks/use-color-scheme';
 
 // Check if running in Expo Go (which doesn't support Google Maps on iOS)
 const isExpoGo = Constants.appOwnership === 'expo';
@@ -17,12 +19,11 @@ const isExpoGo = Constants.appOwnership === 'expo';
 // Determine map provider - use Google on development builds, default (Apple) in Expo Go
 const MAP_PROVIDER = Platform.OS === 'ios' && isExpoGo ? PROVIDER_DEFAULT : PROVIDER_GOOGLE;
 
-// Debug: Temporarily disable custom style to test if Google Maps works without it
-const USE_CUSTOM_STYLE = false;
+const USE_CUSTOM_STYLE = true;
 
 console.log(`[RouteMap] Provider: ${MAP_PROVIDER === PROVIDER_GOOGLE ? 'Google' : 'Apple'}, ExpoGo: ${isExpoGo}`);
 
-// Pastel map style for Google Maps - tailwind-inspired soft colors
+// Pastel map style for Google Maps - tailwind-inspired soft colors (light mode)
 const PASTEL_MAP_STYLE = [
   { elementType: 'geometry', stylers: [{ color: '#F9FAFB' }] },
   { elementType: 'labels.text.fill', stylers: [{ color: '#4B5563' }] },
@@ -42,6 +43,32 @@ const PASTEL_MAP_STYLE = [
   { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#059669' }] },
   { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#F3F4F6' }] },
   { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#ECFDF5' }] },
+  { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi.business', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit', elementType: 'labels', stylers: [{ visibility: 'off' }] },
+  { featureType: 'transit.station', stylers: [{ visibility: 'off' }] },
+];
+
+// Dark map style for Google Maps
+const DARK_MAP_STYLE = [
+  { elementType: 'geometry', stylers: [{ color: '#1F2937' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#9CA3AF' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#111827' }] },
+  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#374151' }] },
+  { featureType: 'administrative.land_parcel', elementType: 'labels.text.fill', stylers: [{ color: '#6B7280' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#374151' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#1F2937' }] },
+  { featureType: 'road.arterial', elementType: 'labels.text.fill', stylers: [{ color: '#9CA3AF' }] },
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#4B5563' }] },
+  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#374151' }] },
+  { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#9CA3AF' }] },
+  { featureType: 'road.local', elementType: 'labels.text.fill', stylers: [{ color: '#6B7280' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#1E3A5F' }] },
+  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#3B82F6' }] },
+  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#1A3A2A' }] },
+  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#4ADE80' }] },
+  { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#1F2937' }] },
+  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#1A2E1A' }] },
   { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
   { featureType: 'poi.business', stylers: [{ visibility: 'off' }] },
   { featureType: 'transit', elementType: 'labels', stylers: [{ visibility: 'off' }] },
@@ -182,19 +209,26 @@ function calculateStopPositions(stops: RouteStop[]): StopWithOffset[] {
 
 interface RouteMapProps {
   route: Route;
+  userLocation?: { latitude: number; longitude: number } | null;
   onOpenAddStop?: () => void;
   onRemoveStop?: (stopId: string) => Promise<void>;
   isRemovingStop?: boolean;
   isAddingStop?: boolean;
+  onRequestLocation?: () => Promise<{ latitude: number; longitude: number } | null>;
 }
 
 export function RouteMap({
   route,
+  userLocation,
   onOpenAddStop,
   onRemoveStop,
   isRemovingStop = false,
   isAddingStop = false,
+  onRequestLocation,
 }: RouteMapProps) {
+
+  const mapColors = useMapColors();
+  const colorScheme = useColorScheme();
 
   const [selectedStop, setSelectedStop] = useState<RouteStop | null>(null);
   const [showAddStopTooltip, setShowAddStopTooltip] = useState(false);
@@ -209,6 +243,7 @@ export function RouteMap({
   const [markersKey, setMarkersKey] = useState(0);
   const [tracksViewChanges, setTracksViewChanges] = useState(false);
   const [segmentRevision, setSegmentRevision] = useState(0);
+  const [isRequestingLocation, setIsRequestingLocation] = useState(false);
   const mapRef = useRef<MapView>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -469,21 +504,43 @@ export function RouteMap({
     }, 300);
   };
 
-  const exportToAppleMaps = useCallback(async () => {
+  const zoomToMyLocation = useCallback(async () => {
+    let loc = userLocation;
+    if (!loc && onRequestLocation) {
+      setIsRequestingLocation(true);
+      try { loc = await onRequestLocation(); }
+      finally { setIsRequestingLocation(false); }
+    }
+    if (!loc || !mapRef.current) return;
+    mapRef.current.animateToRegion({
+      latitude: loc.latitude,
+      longitude: loc.longitude,
+      latitudeDelta: 0.01,
+      longitudeDelta: 0.01,
+    }, 500);
+  }, [userLocation, onRequestLocation]);
+
+  const exportToAppleMaps = useCallback(async (
+    locationOverride?: { latitude: number; longitude: number } | null
+  ) => {
     if (route.stops.length === 0) {
       Alert.alert('No Stops', 'There are no stops to export.');
       return;
     }
 
     const sortedStops = [...route.stops].sort((a, b) => a.order - b.order);
-    const firstStop = sortedStops[0];
-    const remainingStops = sortedStops.slice(1);
-    const saddr = `${firstStop.latitude},${firstStop.longitude}`;
-    const daddr = remainingStops
+    const effectiveLocation = locationOverride ?? userLocation;
+
+    // If we have user's GPS, use it as origin and route through ALL stops
+    const saddr = effectiveLocation
+      ? `${effectiveLocation.latitude},${effectiveLocation.longitude}`
+      : `${sortedStops[0].latitude},${sortedStops[0].longitude}`;
+    const destinationStops = effectiveLocation ? sortedStops : sortedStops.slice(1);
+    const daddr = destinationStops
       .map(stop => `${stop.latitude},${stop.longitude}`)
       .join('+to:');
 
-    const url = remainingStops.length > 0
+    const url = destinationStops.length > 0
       ? `maps://?saddr=${saddr}&daddr=${daddr}&dirflg=d`
       : `maps://?saddr=${saddr}&dirflg=d`;
 
@@ -492,7 +549,7 @@ export function RouteMap({
       if (supported) {
         await Linking.openURL(url);
       } else {
-        const webUrl = remainingStops.length > 0
+        const webUrl = destinationStops.length > 0
           ? `http://maps.apple.com/?saddr=${saddr}&daddr=${daddr}&dirflg=d`
           : `http://maps.apple.com/?saddr=${saddr}&dirflg=d`;
         await Linking.openURL(webUrl);
@@ -501,21 +558,47 @@ export function RouteMap({
       console.error('Error opening Apple Maps:', error);
       Alert.alert('Unable to Open Maps', 'Could not open Apple Maps. Please try again.');
     }
-  }, [route.stops]);
+  }, [route.stops, userLocation]);
 
-  const exportToGoogleMaps = useCallback(async () => {
+  const exportToGoogleMaps = useCallback(async (
+    locationOverride?: { latitude: number; longitude: number } | null
+  ) => {
     if (route.stops.length === 0) {
       Alert.alert('No Stops', 'There are no stops to export.');
       return;
     }
 
     const sortedStops = [...route.stops].sort((a, b) => a.order - b.order);
-    const firstStop = sortedStops[0];
+    const effectiveLocation = locationOverride ?? userLocation;
+
+    // On iOS, try opening Google Maps directly via native URL scheme
+    if (Platform.OS === 'ios') {
+      const saddr = effectiveLocation
+        ? `${effectiveLocation.latitude},${effectiveLocation.longitude}`
+        : `${sortedStops[0].latitude},${sortedStops[0].longitude}`;
+      const destinationStops = effectiveLocation ? sortedStops : sortedStops.slice(1);
+      const daddr = destinationStops
+        .map(stop => `${stop.latitude},${stop.longitude}`)
+        .join('+to:');
+      const nativeUrl = `comgooglemaps://?saddr=${saddr}&daddr=${daddr}&directionsmode=driving`;
+
+      try {
+        await Linking.openURL(nativeUrl);
+        return;
+      } catch {
+        // Google Maps not installed or scheme failed — fall through to web URL
+      }
+    }
+
+    // Fallback: web URL (works on all platforms, opens Google Maps natively on Android)
     const lastStop = sortedStops[sortedStops.length - 1];
-    const middleStops = sortedStops.slice(1, -1);
-    const origin = `${firstStop.latitude},${firstStop.longitude}`;
+    const origin = effectiveLocation
+      ? `${effectiveLocation.latitude},${effectiveLocation.longitude}`
+      : `${sortedStops[0].latitude},${sortedStops[0].longitude}`;
     const destination = `${lastStop.latitude},${lastStop.longitude}`;
-    const waypoints = middleStops
+    // When using user location, all stops become waypoints except the last (destination)
+    const waypointStops = effectiveLocation ? sortedStops.slice(0, -1) : sortedStops.slice(1, -1);
+    const waypoints = waypointStops
       .map(stop => `${stop.latitude},${stop.longitude}`)
       .join('|');
 
@@ -526,19 +609,32 @@ export function RouteMap({
 
     try {
       await Linking.openURL(url);
-    } catch (error) {
-      console.error('Error opening Google Maps:', error);
-      Alert.alert('Unable to Open Google Maps', 'Could not open Google Maps. Please try again.');
+    } catch {
+      Alert.alert(
+        'Google Maps Not Found',
+        'Could not open Google Maps. Would you like to install it?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Install',
+            onPress: () => Linking.openURL('https://apps.apple.com/app/google-maps/id585027354'),
+          },
+        ]
+      );
     }
-  }, [route.stops]);
+  }, [route.stops, userLocation]);
 
   const handleNavigationAppSelect = useCallback(async (app: NavigationApp) => {
     setIsExportingRoute(true);
     try {
+      let currentLocation = userLocation;
+      if (!currentLocation && onRequestLocation) {
+        currentLocation = await onRequestLocation();
+      }
       if (app === 'apple') {
-        await exportToAppleMaps();
+        await exportToAppleMaps(currentLocation);
       } else {
-        await exportToGoogleMaps();
+        await exportToGoogleMaps(currentLocation);
       }
       setShowNavSelectorModal(false);
     } catch (error) {
@@ -546,7 +642,7 @@ export function RouteMap({
     } finally {
       setIsExportingRoute(false);
     }
-  }, [exportToAppleMaps, exportToGoogleMaps]);
+  }, [exportToAppleMaps, exportToGoogleMaps, userLocation, onRequestLocation]);
 
   useEffect(() => {
     if (mapStatus === 'error') {
@@ -554,16 +650,21 @@ export function RouteMap({
     }
   }, [mapStatus]);
 
+  const customMapStyle = USE_CUSTOM_STYLE && MAP_PROVIDER === PROVIDER_GOOGLE
+    ? (colorScheme === 'dark' ? DARK_MAP_STYLE : PASTEL_MAP_STYLE)
+    : undefined;
+
   return (
     <View style={styles.container}>
       <MapView
         ref={mapRef}
         style={styles.map}
         provider={MAP_PROVIDER}
-        customMapStyle={USE_CUSTOM_STYLE && MAP_PROVIDER === PROVIDER_GOOGLE ? PASTEL_MAP_STYLE : undefined}
+        customMapStyle={customMapStyle}
         initialRegion={initialRegion}
         showsCompass={true}
         showsScale={true}
+        showsUserLocation={false}
         showsMyLocationButton={false}
         showsBuildings={false}
         showsIndoors={false}
@@ -587,8 +688,8 @@ export function RouteMap({
           <>
             {routeSegments.map((segment) => {
               const colors = segment.mode === 'walking'
-                ? MapColors.route.walking
-                : MapColors.route.driving;
+                ? mapColors.route.walking
+                : mapColors.route.driving;
               return (
                 <React.Fragment key={`segment-${segment.id}-r${segmentRevision}`}>
                   <Polyline
@@ -626,21 +727,21 @@ export function RouteMap({
           <React.Fragment key={`fallback-${stopsKey}`}>
             <Polyline
               coordinates={routeCoordinates}
-              strokeColor={MapColors.route.driving.shadow}
+              strokeColor={mapColors.route.driving.shadow}
               strokeWidth={10}
               lineCap="round"
               lineJoin="round"
             />
             <Polyline
               coordinates={routeCoordinates}
-              strokeColor={MapColors.route.driving.main}
+              strokeColor={mapColors.route.driving.main}
               strokeWidth={6}
               lineCap="round"
               lineJoin="round"
             />
             <Polyline
               coordinates={routeCoordinates}
-              strokeColor={MapColors.route.driving.glow}
+              strokeColor={mapColors.route.driving.glow}
               strokeWidth={3}
               lineCap="round"
               lineJoin="round"
@@ -662,7 +763,7 @@ export function RouteMap({
               tracksViewChanges={tracksViewChanges}
             >
               <View style={styles.parkingMarker}>
-                <IconSymbol name="parkingsign.circle.fill" size={32} color={MapColors.parking} />
+                <IconSymbol name="parkingsign.circle.fill" size={32} color={mapColors.parking} />
               </View>
             </Marker>
           ))}
@@ -677,7 +778,7 @@ export function RouteMap({
                 { latitude: displayLat, longitude: displayLng },
                 { latitude: stop.latitude, longitude: stop.longitude },
               ]}
-              strokeColor={MapColors.offsetIndicator}
+              strokeColor={mapColors.offsetIndicator}
               strokeWidth={2}
               lineDashPattern={[6, 4]}
               lineCap="round"
@@ -698,9 +799,13 @@ export function RouteMap({
             onPress={() => setSelectedStop(stop)}
           >
             <View style={styles.markerContainer}>
-              <View style={styles.floatingLabel}>
+              <View style={[styles.floatingLabel, {
+                backgroundColor: mapColors.label.background,
+                shadowColor: mapColors.label.shadow,
+                borderColor: mapColors.label.border,
+              }]}>
                 <ThemedText
-                  style={styles.floatingLabelText}
+                  style={[styles.floatingLabelText, { color: mapColors.label.text }]}
                   numberOfLines={1}
                   ellipsizeMode="tail"
                 >
@@ -713,13 +818,28 @@ export function RouteMap({
             </View>
           </Marker>
         ))}
+
+        {/* Custom "You Are Here" marker */}
+        {mapStatus === 'ready' && userLocation && (
+          <Marker
+            coordinate={userLocation}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
+            zIndex={999}
+          >
+            <View style={styles.userLocationMarker}>
+              <View style={styles.userLocationPulse} />
+              <View style={styles.userLocationDot} />
+            </View>
+          </Marker>
+        )}
       </MapView>
 
       {/* Loading indicator */}
       {isLoadingRoute && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color={MapColors.loading.spinner} />
-          <ThemedText style={styles.loadingText}>
+        <View style={[styles.loadingOverlay, { backgroundColor: mapColors.loading.background }]}>
+          <ActivityIndicator size="large" color={mapColors.loading.spinner} />
+          <ThemedText style={[styles.loadingText, { color: mapColors.loading.text }]}>
             Loading route...
           </ThemedText>
         </View>
@@ -729,7 +849,7 @@ export function RouteMap({
       {onOpenAddStop && (
         <Animated.View style={[styles.addStopButtonContainer, { opacity: controlsOpacity }]}>
           <Pressable
-            style={[styles.addStopButton, isAddingStop && styles.addStopButtonDisabled]}
+            style={[styles.addStopButton, { backgroundColor: mapColors.controls.background }, isAddingStop && styles.addStopButtonDisabled]}
             onPress={() => !isAddingStop && onOpenAddStop()}
             disabled={isAddingStop}
             onHoverIn={() => Platform.OS === 'web' && setShowAddStopTooltip(true)}
@@ -739,14 +859,14 @@ export function RouteMap({
             accessibilityRole="button"
           >
             {isAddingStop ? (
-              <ActivityIndicator size="small" color={MapColors.controls.icon} />
+              <ActivityIndicator size="small" color={mapColors.controls.icon} />
             ) : (
-              <IconSymbol name="plus" size={22} color={MapColors.controls.icon} />
+              <IconSymbol name="plus" size={22} color={mapColors.controls.icon} />
             )}
           </Pressable>
           {showAddStopTooltip && (
             <View style={styles.tooltip}>
-              <ThemedText style={styles.tooltipText}>Add Venue</ThemedText>
+              <ThemedText style={[styles.tooltipText, { borderColor: mapColors.controls.border }]}>Add Venue</ThemedText>
             </View>
           )}
         </Animated.View>
@@ -767,16 +887,27 @@ export function RouteMap({
       {/* Map Controls */}
       <Animated.View style={[styles.mapControls, { opacity: controlsOpacity }]}>
         <TouchableOpacity
-          style={[styles.controlButton, styles.extentsButton]}
+          style={[styles.controlButton, { backgroundColor: mapColors.controls.background }, styles.extentsButton]}
           onPress={fitBounds}
         >
-          <ThemedText style={styles.controlButtonText}>&#x2291;</ThemedText>
+          <ThemedText style={[styles.controlButtonText, { color: mapColors.controls.icon }]}>&#x2291;</ThemedText>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.controlButton} onPress={zoomIn}>
-          <ThemedText style={styles.controlButtonText}>+</ThemedText>
+        <TouchableOpacity style={[styles.controlButton, { backgroundColor: mapColors.controls.background }]} onPress={zoomIn}>
+          <ThemedText style={[styles.controlButtonText, { color: mapColors.controls.icon }]}>+</ThemedText>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.controlButton} onPress={zoomOut}>
-          <ThemedText style={styles.controlButtonText}>&minus;</ThemedText>
+        <TouchableOpacity style={[styles.controlButton, { backgroundColor: mapColors.controls.background }]} onPress={zoomOut}>
+          <ThemedText style={[styles.controlButtonText, { color: mapColors.controls.icon }]}>&minus;</ThemedText>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.controlButton, { backgroundColor: mapColors.controls.background }, styles.locationButton]}
+          onPress={zoomToMyLocation}
+          disabled={isRequestingLocation}
+        >
+          {isRequestingLocation ? (
+            <ActivityIndicator size="small" color={mapColors.controls.icon} />
+          ) : (
+            <IconSymbol name="location.crosshairs" size={22} color={mapColors.controls.icon} />
+          )}
         </TouchableOpacity>
       </Animated.View>
 
@@ -813,7 +944,6 @@ const styles = StyleSheet.create({
     top: '50%',
     left: '50%',
     transform: [{ translateX: -60 }, { translateY: -40 }],
-    backgroundColor: MapColors.loading.background,
     borderRadius: 16,
     padding: 24,
     alignItems: 'center',
@@ -829,7 +959,6 @@ const styles = StyleSheet.create({
     marginTop: 14,
     fontSize: 14,
     fontWeight: '600',
-    color: MapColors.loading.text,
   },
   addStopButtonContainer: {
     position: 'absolute',
@@ -839,7 +968,6 @@ const styles = StyleSheet.create({
   addStopButton: {
     width: 46,
     height: 46,
-    backgroundColor: MapColors.controls.background,
     borderRadius: 23,
     justifyContent: 'center',
     alignItems: 'center',
@@ -861,7 +989,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '500',
-    borderColor: MapColors.controls.border,
   },
   exportButtonContainer: {
     position: 'absolute',
@@ -891,13 +1018,12 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 16,
     top: '50%',
-    transform: [{ translateY: -70 }],
+    transform: [{ translateY: -95 }],
     gap: 10,
   },
   controlButton: {
     width: 46,
     height: 46,
-    backgroundColor: MapColors.controls.background,
     borderRadius: 23,
     justifyContent: 'center',
     alignItems: 'center',
@@ -908,7 +1034,6 @@ const styles = StyleSheet.create({
   controlButtonText: {
     fontSize: 22,
     fontWeight: '600',
-    color: MapColors.controls.icon,
   },
   parkingMarker: {
     alignItems: 'center',
@@ -920,17 +1045,14 @@ const styles = StyleSheet.create({
     overflow: 'visible',
   },
   floatingLabel: {
-    backgroundColor: MapColors.label.background,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 12,
-    shadowColor: MapColors.label.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 1,
     shadowRadius: 6,
     elevation: 4,
     borderWidth: 1.5,
-    borderColor: MapColors.label.border,
     marginBottom: 6,
     maxWidth: 180,
     minWidth: 60,
@@ -938,8 +1060,36 @@ const styles = StyleSheet.create({
   floatingLabelText: {
     fontSize: 12,
     fontWeight: '700',
-    color: MapColors.label.text,
     textAlign: 'center',
     letterSpacing: 0.2,
+  },
+  locationButton: {
+    marginTop: 6,
+  },
+  userLocationMarker: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  userLocationPulse: {
+    position: 'absolute',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(59,130,246,0.2)',
+  },
+  userLocationDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#3B82F6',
+    borderWidth: 2.5,
+    borderColor: '#FFFFFF',
+    shadowColor: '#3B82F6',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 4,
+    elevation: 4,
   },
 });

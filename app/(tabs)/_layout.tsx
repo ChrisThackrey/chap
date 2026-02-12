@@ -3,6 +3,7 @@ import React from 'react';
 
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { ThemeToggle } from '@/components/theme-toggle';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
@@ -12,13 +13,19 @@ export default function TabLayout() {
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        headerShown: false,
+        tabBarActiveTintColor: Colors[colorScheme].tint,
+        headerShown: true,
+        headerRight: () => <ThemeToggle />,
+        headerRightContainerStyle: { paddingRight: 16 },
+        headerStyle: { backgroundColor: Colors[colorScheme].background },
+        headerTintColor: Colors[colorScheme].text,
         tabBarButton: HapticTab,
         tabBarStyle: {
           height: 60,
           paddingBottom: 8,
           paddingTop: 4,
+          backgroundColor: Colors[colorScheme].background,
+          borderTopColor: Colors[colorScheme].border,
         },
       }}>
       <Tabs.Screen

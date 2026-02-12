@@ -192,7 +192,7 @@ async function validateStopWithProviderChain(
 
   // Progressive radius tightening: later stops search in a smaller area
   const stopNum = (stopIndex ?? 0) + 1;
-  const radiusScale = stopNum === 1 ? 1.0 : stopNum === 2 ? 0.8 : stopNum === 3 ? 0.65 : 0.5;
+  const radiusScale = stopNum === 1 ? 1.0 : stopNum === 2 ? 0.7 : stopNum === 3 ? 0.5 : 0.4;
   const effectiveRadius = expandedRadius * radiusScale;
   if (!stop.name || !stop.type || !stop.address) {
     throw new Error('Invalid stop: missing required fields');
@@ -289,9 +289,10 @@ async function tryDirectPromptSearch(
       return null;
     }
 
-    // Filter for valid coordinates
+    // Filter for valid coordinates and displayName
     const validPlaces = places.filter(
-      p => p.location &&
+      p => p.displayName?.text &&
+        p.location &&
         typeof p.location.latitude === 'number' &&
         typeof p.location.longitude === 'number' &&
         !isNaN(p.location.latitude) &&
@@ -416,7 +417,8 @@ async function tryGooglePlaces(
     // Normalize Google results for scoring (New API format)
     // Filter out venues with invalid/missing coordinates
     const normalizedVenues: NormalizedVenue[] = places
-      .filter(p => p.location &&
+      .filter(p => p.displayName?.text &&
+                   p.location &&
                    typeof p.location.latitude === 'number' &&
                    typeof p.location.longitude === 'number' &&
                    !isNaN(p.location.latitude) &&
@@ -779,19 +781,19 @@ function calculateNormalizedVenueScore(venue: NormalizedVenue, stop: Partial<Rou
     score += 5;
   }
 
-  // Proximity to previously validated stops (0-25 points)
+  // Proximity to LAST validated stop only (0-25 points)
+  // Progressive narrowing: each stop only cares about distance to the previous one
   if (previousStops && previousStops.length > 0) {
-    const distances = previousStops.map(ps =>
-      calculateDistanceKm(venue.latitude, venue.longitude, ps.latitude, ps.longitude)
+    const lastStop = previousStops[previousStops.length - 1];
+    const distToLastKm = calculateDistanceKm(
+      venue.latitude, venue.longitude, lastStop.latitude, lastStop.longitude
     );
-    const avgDistKm = distances.reduce((sum, d) => sum + d, 0) / distances.length;
-    const minDistKm = Math.min(...distances);
 
-    // Proximity score: full points at 0km, zero at 30km
-    const proximityScore = Math.max(0, 1 - avgDistKm / 30) * 20;
+    // Proximity score: full points at 0km, zero at 20km
+    const proximityScore = Math.max(0, 1 - distToLastKm / 20) * 20;
 
-    // Nearest stop bonus
-    const nearestBonus = minDistKm < 2 ? 5 : minDistKm < 5 ? 3 : 0;
+    // Close-to-last-stop bonus
+    const nearestBonus = distToLastKm < 2 ? 5 : distToLastKm < 5 ? 3 : 0;
 
     score += proximityScore + nearestBonus;
   }
@@ -822,14 +824,11 @@ async function getSearchCenter(
     }
   }
 
-  // If we have previous stops, shift the search center toward their centroid
+  // If we have previous stops, center the search on the LAST validated stop
+  // This creates progressive narrowing: each search starts where the last venue was found
   if (previousStops && previousStops.length > 0) {
-    const allPoints = [baseLocation, ...previousStops.map(s => ({ latitude: s.latitude, longitude: s.longitude }))];
-    const centroid = {
-      latitude: allPoints.reduce((sum, p) => sum + p.latitude, 0) / allPoints.length,
-      longitude: allPoints.reduce((sum, p) => sum + p.longitude, 0) / allPoints.length,
-    };
-    return centroid;
+    const lastStop = previousStops[previousStops.length - 1];
+    return { latitude: lastStop.latitude, longitude: lastStop.longitude };
   }
 
   return baseLocation;

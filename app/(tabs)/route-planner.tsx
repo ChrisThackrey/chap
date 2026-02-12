@@ -1,6 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { StyleSheet, View, TouchableOpacity, Modal, ScrollView, Alert } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedView } from '@/components/themed-view';
 import { ThemedText } from '@/components/themed-text';
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -62,7 +61,6 @@ export default function RoutePlannerScreen() {
     reset,
     loadRoute,
     // Add stop
-    addSpecificStop,
     canAddStop,
     // Create route from stops
     createRouteFromStops,
@@ -86,8 +84,22 @@ export default function RoutePlannerScreen() {
   const pinnedStopsRef = useRef<RouteStop[]>([]);
   pinnedStopsRef.current = pinnedStops;
   const colorScheme = useColorScheme();
-  const colors = Colors[colorScheme ?? 'light'];
-  const insets = useSafeAreaInsets();
+  const colors = Colors[colorScheme];
+
+  const addStopSearchLocation = useMemo(() => {
+    if (route && route.stops.length > 0) {
+      return {
+        latitude: route.stops.reduce((s, st) => s + st.latitude, 0) / route.stops.length,
+        longitude: route.stops.reduce((s, st) => s + st.longitude, 0) / route.stops.length,
+      };
+    }
+    if (preferredLocation) {
+      return { latitude: preferredLocation.latitude, longitude: preferredLocation.longitude };
+    }
+    return deviceLocation;
+  }, [route, preferredLocation, deviceLocation]);
+
+  const canAddMoreStops = canAddStop;
 
   // Log validation warnings to console
   useEffect(() => {
@@ -100,14 +112,21 @@ export default function RoutePlannerScreen() {
     }
   }, [warnings]);
 
+  // Request location when map appears (covers saved-route loads that skip requestLocation)
+  useEffect(() => {
+    if (state === 'success' && !deviceLocation) {
+      requestLocation();
+    }
+  }, [state, deviceLocation, requestLocation]);
+
   // Show suggestion banner after route generates
   useEffect(() => {
-    if (state === 'success' && canAddStop) {
+    if (state === 'success' && canAddMoreStops) {
       const timer = setTimeout(() => setShowAddStopSuggestion(true), 800);
       return () => clearTimeout(timer);
     }
     setShowAddStopSuggestion(false);
-  }, [state, canAddStop]);
+  }, [state, canAddMoreStops]);
 
   // Merge pinned stops after AI generation succeeds
   useEffect(() => {
@@ -191,9 +210,24 @@ export default function RoutePlannerScreen() {
   }, []);
 
   const handleAddStopSelect = useCallback((stop: RouteStop) => {
-    addSpecificStop(stop);
-    setShowAddStopModal(false);
-  }, [addSpecificStop]);
+    if (!route) return;
+    try {
+      const allStops = [...route.stops, stop];
+      const userLoc = preferredLocation
+        ? { latitude: preferredLocation.latitude, longitude: preferredLocation.longitude }
+        : deviceLocation;
+      const ordered = orderByProximity(allStops, userLoc);
+      loadRoute({
+        ...route,
+        stops: ordered,
+        segments: undefined,
+      });
+      setShowAddStopModal(false);
+    } catch (err) {
+      console.error('[RoutePlanner] Failed to add stop:', err);
+      setShowAddStopModal(false);
+    }
+  }, [route, preferredLocation, deviceLocation, loadRoute]);
 
   const handlePinPlace = useCallback((place: GooglePlaceNew) => {
     if (pinnedStops.some(s => s.venueDetails?.placeId === place.id)) return;
@@ -334,7 +368,7 @@ export default function RoutePlannerScreen() {
               <ThemedText style={styles.pinnedLabel}>Must-include:</ThemedText>
               <View style={styles.pinnedChipsWrap}>
                 {pinnedStops.map(stop => (
-                  <View key={stop.id} style={styles.pinnedChip}>
+                  <View key={stop.id} style={[styles.pinnedChip, colorScheme === 'dark' && { backgroundColor: colors.surface }]}>
                     <IconSymbol
                       name={STOP_ICON_MAPPING[stop.type].ios as any}
                       size={14}
@@ -357,7 +391,7 @@ export default function RoutePlannerScreen() {
           {/* Pin a specific place button */}
           {isGooglePlacesConfigured() && (
             <TouchableOpacity
-              style={styles.pinPlaceButton}
+              style={[styles.pinPlaceButton, { borderColor: colors.border }]}
               onPress={() => setShowPlaceSearch(true)}
               activeOpacity={0.7}
             >
@@ -411,20 +445,22 @@ export default function RoutePlannerScreen() {
       )}
 
       {state === 'success' && route && (
-        <View style={[styles.successContainer, { paddingTop: insets.top }]}>
+        <View style={styles.successContainer}>
           <View style={styles.mapContainer}>
             <RouteMap
               route={route}
-              onOpenAddStop={canAddStop ? handleOpenAddStop : undefined}
+              userLocation={deviceLocation}
+              onOpenAddStop={canAddMoreStops ? handleOpenAddStop : undefined}
               onRemoveStop={removeStop}
               isRemovingStop={isRemovingStop}
               isAddingStop={false}
+              onRequestLocation={requestLocation}
             />
           </View>
 
           {/* Suggestion banner */}
-          {showAddStopSuggestion && canAddStop && (
-            <View style={styles.suggestionBanner}>
+          {showAddStopSuggestion && canAddMoreStops && (
+            <View style={[styles.suggestionBanner, { backgroundColor: colorScheme === 'dark' ? colors.surface : '#FFFFFF' }]}>
               <TouchableOpacity
                 style={styles.suggestionContent}
                 onPress={handleOpenAddStop}
@@ -444,7 +480,7 @@ export default function RoutePlannerScreen() {
             </View>
           )}
 
-          <View style={styles.summaryOverlay}>
+          <View style={[styles.summaryOverlay, { backgroundColor: colorScheme === 'dark' ? 'rgba(17, 24, 39, 0.97)' : 'rgba(255, 255, 255, 0.95)' }]}>
             <ScrollView style={styles.summaryScroll} showsVerticalScrollIndicator={false}>
               <RouteSummary route={route} onSave={handleSave} onRegenerate={reset} />
             </ScrollView>
@@ -453,16 +489,7 @@ export default function RoutePlannerScreen() {
           <AddStopModal
             visible={showAddStopModal}
             route={route}
-            searchLocation={
-              route && route.stops.length > 0
-                ? {
-                    latitude: route.stops.reduce((s, st) => s + st.latitude, 0) / route.stops.length,
-                    longitude: route.stops.reduce((s, st) => s + st.longitude, 0) / route.stops.length,
-                  }
-                : preferredLocation
-                  ? { latitude: preferredLocation.latitude, longitude: preferredLocation.longitude }
-                  : deviceLocation
-            }
+            searchLocation={addStopSearchLocation}
             radiusMeters={(radius?.radiusMiles || 25) * 1609}
             onSelectStop={handleAddStopSelect}
             onDismiss={() => setShowAddStopModal(false)}
@@ -472,7 +499,7 @@ export default function RoutePlannerScreen() {
 
       {/* Place search modal for initial screen pinning */}
       <Modal visible={showPlaceSearch} animationType="slide" presentationStyle="pageSheet">
-        <View style={styles.placeSearchModal}>
+        <View style={[styles.placeSearchModal, { backgroundColor: colors.background }]}>
           <View style={styles.placeSearchHeader}>
             <ThemedText style={styles.placeSearchTitle}>Search for a Place</ThemedText>
             <TouchableOpacity onPress={() => setShowPlaceSearch(false)}>
@@ -613,7 +640,6 @@ const styles = StyleSheet.create({
   suggestionText: {
     fontSize: 14,
     fontWeight: '600',
-    color: tailwind.gray700,
   },
   suggestionDismiss: {
     padding: 8,
@@ -667,7 +693,6 @@ const styles = StyleSheet.create({
   pinnedChipText: {
     fontSize: 14,
     fontWeight: '500',
-    color: tailwind.gray700,
     maxWidth: 140,
   },
   // Pin place button
@@ -691,7 +716,6 @@ const styles = StyleSheet.create({
   // Place search modal
   placeSearchModal: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
     paddingHorizontal: 20,
     paddingTop: 16,
   },
@@ -704,6 +728,5 @@ const styles = StyleSheet.create({
   placeSearchTitle: {
     fontSize: 22,
     fontWeight: '700',
-    color: tailwind.gray900,
   },
 });

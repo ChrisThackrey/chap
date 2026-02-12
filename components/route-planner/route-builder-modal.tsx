@@ -13,8 +13,30 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { searchNearbyPlaces, googlePlaceToRouteStop, GooglePlaceNew, calculateDistance } from '@/lib/google-places';
 import { STOP_ICON_MAPPING } from '@/constants/stop-icons';
 import { SuggestionCard } from './suggestion-card';
-import { RoutePlan, RouteStop } from '@/types/route';
-import { tailwind } from '@/constants/theme';
+import { RoutePlan, RouteStop, StopType } from '@/types/route';
+import { Colors, tailwind } from '@/constants/theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
+
+const BROAD_QUERIES: Record<StopType, string> = {
+  restaurant: 'popular restaurants',
+  cafe: 'coffee shops and cafes',
+  bar: 'bars and pubs',
+  park: 'parks and gardens',
+  museum: 'museums and galleries',
+  theater: 'theaters and performing arts',
+  viewpoint: 'scenic viewpoints and overlooks',
+  activity: 'fun activities and entertainment',
+  shopping: 'shopping and stores',
+};
+
+function deduplicatePlaces(places: GooglePlaceNew[]): GooglePlaceNew[] {
+  const seen = new Set<string>();
+  return places.filter(place => {
+    if (seen.has(place.id)) return false;
+    seen.add(place.id);
+    return true;
+  });
+}
 
 interface RouteBuilderModalProps {
   visible: boolean;
@@ -40,6 +62,8 @@ export function RouteBuilderModal({
   const [stepPlaces, setStepPlaces] = useState<Map<number, GooglePlaceNew[]>>(new Map());
   const [loadingStep, setLoadingStep] = useState<number | null>(null);
   const insets = useSafeAreaInsets();
+  const colorScheme = useColorScheme();
+  const colors = Colors[colorScheme ?? 'light'];
 
   const totalSteps = plan.stops.length;
   const isConfirmation = currentStep === totalSteps;
@@ -111,15 +135,37 @@ export function RouteBuilderModal({
 
     (async () => {
       try {
-        const results = await searchNearbyPlaces(
+        const specificResults = await searchNearbyPlaces(
           planStop.searchQuery,
           dynamicSearchCenter.latitude,
           dynamicSearchCenter.longitude,
           dynamicRadius,
         );
+        if (cancelled) return;
+
+        let allResults = specificResults;
+
+        // Supplementary broad search when specific query returns <10
+        if (specificResults.length < 10) {
+          console.log(`[RouteBuilder] Specific query returned only ${specificResults.length} results, running broader search...`);
+          try {
+            const broadResults = await searchNearbyPlaces(
+              BROAD_QUERIES[planStop.type],
+              dynamicSearchCenter.latitude,
+              dynamicSearchCenter.longitude,
+              Math.round(dynamicRadius * 1.5),
+            );
+            if (!cancelled) {
+              allResults = deduplicatePlaces([...specificResults, ...broadResults]);
+            }
+          } catch {
+            // Fallback: just use whatever the specific search found
+          }
+        }
+        if (cancelled) return;
 
         // Rank-blended sort: 60% relevance (Google's order) + 40% distance rank
-        const candidates = results.slice(0, 10);
+        const candidates = allResults.slice(0, 15);
         const withRelevanceRank = candidates.map((r, i) => ({ place: r, relevanceRank: i }));
 
         // Distance rank: sort by distance to search center, assign 0..N ranks
@@ -137,11 +183,13 @@ export function RouteBuilderModal({
         const distanceRankMap = new Map<string, number>();
         byDistance.forEach((item, i) => distanceRankMap.set(item.place.id, i));
 
-        // Blend ranks (same 0–N scale, so neither dominates)
+        // Blend ranks: step 0 uses pure relevance, later steps blend 60/40
+        const relevanceWeight = currentStep === 0 ? 1.0 : 0.6;
+        const distanceWeight = currentStep === 0 ? 0.0 : 0.4;
         const sorted = withRelevanceRank
           .sort((a, b) => {
-            const scoreA = a.relevanceRank * 0.6 + (distanceRankMap.get(a.place.id) ?? candidates.length) * 0.4;
-            const scoreB = b.relevanceRank * 0.6 + (distanceRankMap.get(b.place.id) ?? candidates.length) * 0.4;
+            const scoreA = a.relevanceRank * relevanceWeight + (distanceRankMap.get(a.place.id) ?? candidates.length) * distanceWeight;
+            const scoreB = b.relevanceRank * relevanceWeight + (distanceRankMap.get(b.place.id) ?? candidates.length) * distanceWeight;
             return scoreA - scoreB;
           })
           .map(item => item.place);
@@ -149,7 +197,7 @@ export function RouteBuilderModal({
         if (!cancelled) {
           setStepPlaces((prev) => {
             const next = new Map(prev);
-            next.set(currentStep, sorted.slice(0, 5));
+            next.set(currentStep, sorted.slice(0, 10));
             return next;
           });
         }
@@ -168,7 +216,7 @@ export function RouteBuilderModal({
     })();
 
     return () => { cancelled = true; };
-  }, [visible, currentStep, isConfirmation, dynamicSearchCenter, dynamicRadius, plan.stops, stepPlaces]);
+  }, [visible, currentStep, isConfirmation, dynamicSearchCenter, dynamicRadius, plan, searchLocation, stepPlaces]);
 
   const handleSelectPlace = useCallback((place: GooglePlaceNew) => {
     const stop = googlePlaceToRouteStop(place, currentStep + 1);
@@ -255,9 +303,9 @@ export function RouteBuilderModal({
       presentationStyle="fullScreen"
       onRequestClose={onDismiss}
     >
-      <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+      <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom, backgroundColor: colors.background }]}>
         {/* Header */}
-        <View style={styles.header}>
+        <View style={[styles.header, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
           <View style={styles.headerLeft}>
             <ThemedText style={styles.headerTitle}>
               {isConfirmation ? 'Confirm Your Route' : `Stop ${currentStep + 1} of ${totalSteps}`}
@@ -274,7 +322,7 @@ export function RouteBuilderModal({
         </View>
 
         {/* Progress dots */}
-        <View style={styles.progressRow}>
+        <View style={[styles.progressRow, { backgroundColor: colors.background }]}>
           {plan.stops.map((_, i) => {
             const isCompleted = selectedStops.has(i);
             const isCurrent = i === currentStep;
@@ -286,6 +334,7 @@ export function RouteBuilderModal({
                   styles.progressDot,
                   isCompleted && styles.progressDotCompleted,
                   isCurrent && styles.progressDotCurrent,
+                  !isCompleted && !isCurrent && colorScheme === 'dark' && { backgroundColor: tailwind.gray600 },
                 ]}
               />
             );
@@ -303,26 +352,29 @@ export function RouteBuilderModal({
         {!isConfirmation && (
           <>
             {/* Category badge */}
-            {currentPlanStop && (
-              <View style={styles.categoryRow}>
-                <View style={[
-                  styles.categoryBadge,
-                  { backgroundColor: STOP_ICON_MAPPING[currentPlanStop.type].color + '15' },
-                ]}>
-                  <IconSymbol
-                    name={STOP_ICON_MAPPING[currentPlanStop.type].ios as any}
-                    size={16}
-                    color={STOP_ICON_MAPPING[currentPlanStop.type].color}
-                  />
-                  <ThemedText style={[
-                    styles.categoryText,
-                    { color: STOP_ICON_MAPPING[currentPlanStop.type].color },
+            {currentPlanStop && (() => {
+              const iconCfg = STOP_ICON_MAPPING[currentPlanStop.type] || STOP_ICON_MAPPING.activity;
+              return (
+                <View style={styles.categoryRow}>
+                  <View style={[
+                    styles.categoryBadge,
+                    { backgroundColor: iconCfg.color + '15' },
                   ]}>
-                    {currentPlanStop.type.charAt(0).toUpperCase() + currentPlanStop.type.slice(1)}
-                  </ThemedText>
+                    <IconSymbol
+                      name={iconCfg.ios as any}
+                      size={16}
+                      color={iconCfg.color}
+                    />
+                    <ThemedText style={[
+                      styles.categoryText,
+                      { color: iconCfg.color },
+                    ]}>
+                      {currentPlanStop.type.charAt(0).toUpperCase() + currentPlanStop.type.slice(1)}
+                    </ThemedText>
+                  </View>
                 </View>
-              </View>
-            )}
+              );
+            })()}
 
             {/* Loading */}
             {isLoading && (
@@ -381,10 +433,10 @@ export function RouteBuilderModal({
             )}
 
             {/* Step footer */}
-            <View style={styles.footer}>
+            <View style={[styles.footer, { backgroundColor: colors.background, borderTopColor: colors.border }]}>
               {currentStep > 0 && (
                 <TouchableOpacity
-                  style={styles.footerBtn}
+                  style={[styles.footerBtn, { borderColor: colors.border }]}
                   onPress={handleBack}
                   activeOpacity={0.7}
                 >
@@ -394,7 +446,7 @@ export function RouteBuilderModal({
               )}
               <View style={{ flex: 1 }} />
               <TouchableOpacity
-                style={styles.footerBtn}
+                style={[styles.footerBtn, { borderColor: colors.border }]}
                 onPress={handleSkip}
                 activeOpacity={0.7}
               >
@@ -417,9 +469,9 @@ export function RouteBuilderModal({
 
               {plan.stops.map((planStop, i) => {
                 const selected = selectedStops.get(i);
-                const iconConfig = STOP_ICON_MAPPING[planStop.type];
+                const iconConfig = STOP_ICON_MAPPING[planStop.type] || STOP_ICON_MAPPING.activity;
                 return (
-                  <View key={i} style={styles.confirmCard}>
+                  <View key={i} style={[styles.confirmCard, { backgroundColor: colors.surface }]}>
                     <View style={styles.confirmCardHeader}>
                       <View style={[styles.confirmIcon, { backgroundColor: iconConfig.color + '18' }]}>
                         <IconSymbol
@@ -443,7 +495,7 @@ export function RouteBuilderModal({
                         )}
                       </View>
                       <TouchableOpacity
-                        style={styles.confirmChangeBtn}
+                        style={[styles.confirmChangeBtn, { borderColor: colors.border }]}
                         onPress={() => handleChangeStep(i)}
                       >
                         <ThemedText style={styles.confirmChangeText}>Change</ThemedText>
@@ -455,9 +507,9 @@ export function RouteBuilderModal({
             </ScrollView>
 
             {/* Confirmation footer */}
-            <View style={styles.footer}>
+            <View style={[styles.footer, { backgroundColor: colors.background, borderTopColor: colors.border }]}>
               <TouchableOpacity
-                style={styles.footerBtn}
+                style={[styles.footerBtn, { borderColor: colors.border }]}
                 onPress={() => setCurrentStep(totalSteps - 1)}
                 activeOpacity={0.7}
               >
@@ -509,7 +561,6 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 22,
     fontWeight: '700',
-    color: tailwind.gray900,
   },
   headerSubtitle: {
     fontSize: 14,
@@ -570,7 +621,6 @@ const styles = StyleSheet.create({
   stateTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: tailwind.gray700,
   },
   stateText: {
     fontSize: 14,
@@ -606,13 +656,11 @@ const styles = StyleSheet.create({
   footerBtnText: {
     fontSize: 15,
     fontWeight: '600',
-    color: tailwind.gray600,
   },
   // Confirmation view
   confirmTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: tailwind.gray900,
     marginBottom: 4,
   },
   confirmCard: {
@@ -643,7 +691,6 @@ const styles = StyleSheet.create({
   confirmName: {
     fontSize: 15,
     fontWeight: '600',
-    color: tailwind.gray900,
   },
   confirmAddress: {
     fontSize: 13,

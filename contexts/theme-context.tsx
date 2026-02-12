@@ -30,8 +30,8 @@ export function AppThemeProvider({ children }: ThemeProviderProps) {
     const loadPreference = async () => {
       try {
         const saved = await AsyncStorage.getItem(THEME_STORAGE_KEY);
-        if (saved && (saved === 'light' || saved === 'dark' || saved === 'system')) {
-          setPreferenceState(saved as ThemePreference);
+        if (saved === 'light' || saved === 'dark' || saved === 'system') {
+          setPreferenceState(saved);
         }
       } catch (error) {
         console.error('Failed to load theme preference:', error);
@@ -53,7 +53,7 @@ export function AppThemeProvider({ children }: ThemeProviderProps) {
 
   // Resolve the actual color scheme based on preference
   const colorScheme: ColorScheme =
-    preference === 'system' ? (systemColorScheme ?? 'light') : preference;
+    preference === 'system' ? (systemColorScheme ?? 'dark') : preference;
 
   return (
     <ThemeContext.Provider value={{ preference, colorScheme, setPreference, isLoaded }}>
@@ -76,9 +76,9 @@ export function useColorScheme(): ColorScheme {
   // If used outside provider (e.g., during initial render), return undefined
   // to signal that theme detection should happen at the component level
   if (context === undefined) {
-    // This shouldn't happen in normal app flow, but fallback to light for safety
+    // This shouldn't happen in normal app flow, but fallback to dark for safety
     console.warn('useColorScheme called outside ThemeProvider');
-    return 'light';
+    return 'dark';
   }
   return context.colorScheme;
 }

@@ -1,11 +1,9 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import {
   Modal,
   View,
   TouchableOpacity,
   StyleSheet,
-  Linking,
-  Platform,
   ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -13,7 +11,8 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { Colors, MapColors, tailwind } from '@/constants/theme';
+import { Colors, tailwind } from '@/constants/theme';
+import { useMapColors } from '@/hooks/use-map-colors';
 
 export type NavigationApp = 'apple' | 'google';
 
@@ -31,43 +30,14 @@ export function NavigationAppSelectorModal({
   isExporting = false,
 }: NavigationAppSelectorModalProps) {
   const colorScheme = useColorScheme();
-  const colors = Colors[colorScheme ?? 'light'];
+  const colors = Colors[colorScheme];
+  const mapColors = useMapColors();
   const insets = useSafeAreaInsets();
-  const [isGoogleMapsInstalled, setIsGoogleMapsInstalled] = useState<boolean | null>(null);
   const [selectedApp, setSelectedApp] = useState<NavigationApp>('apple');
-
-  // Check if Google Maps is installed
-  useEffect(() => {
-    const checkGoogleMaps = async () => {
-      if (Platform.OS === 'ios') {
-        try {
-          const canOpen = await Linking.canOpenURL('comgooglemaps://');
-          setIsGoogleMapsInstalled(canOpen);
-        } catch {
-          setIsGoogleMapsInstalled(false);
-        }
-      } else {
-        // On Android, Google Maps is typically always available
-        setIsGoogleMapsInstalled(true);
-      }
-    };
-
-    if (visible) {
-      checkGoogleMaps();
-    }
-  }, [visible]);
 
   const handleSend = useCallback(() => {
     onSelect(selectedApp);
   }, [selectedApp, onSelect]);
-
-  const handleOpenGoogleMapsStore = useCallback(() => {
-    // Open App Store to Google Maps page
-    const appStoreUrl = Platform.OS === 'ios'
-      ? 'https://apps.apple.com/app/google-maps/id585027354'
-      : 'https://play.google.com/store/apps/details?id=com.google.android.apps.maps';
-    Linking.openURL(appStoreUrl);
-  }, []);
 
   // Calculate safe bottom padding
   const bottomPadding = Math.max(20, insets.bottom + 8);
@@ -110,6 +80,7 @@ export function NavigationAppSelectorModal({
               <TouchableOpacity
                 style={[
                   styles.optionButton,
+                  { borderColor: colors.border, backgroundColor: colors.surface },
                   selectedApp === 'apple' && styles.optionButtonSelected,
                 ]}
                 onPress={() => setSelectedApp('apple')}
@@ -126,6 +97,7 @@ export function NavigationAppSelectorModal({
                 </View>
                 <View style={[
                   styles.radioOuter,
+                  { borderColor: colors.border },
                   selectedApp === 'apple' && styles.radioOuterSelected,
                 ]}>
                   {selectedApp === 'apple' && <View style={styles.radioInner} />}
@@ -136,59 +108,37 @@ export function NavigationAppSelectorModal({
               <TouchableOpacity
                 style={[
                   styles.optionButton,
+                  { borderColor: colors.border, backgroundColor: colors.surface },
                   selectedApp === 'google' && styles.optionButtonSelected,
-                  !isGoogleMapsInstalled && styles.optionButtonDisabled,
                 ]}
-                onPress={() => {
-                  if (isGoogleMapsInstalled) {
-                    setSelectedApp('google');
-                  } else {
-                    handleOpenGoogleMapsStore();
-                  }
-                }}
+                onPress={() => setSelectedApp('google')}
                 activeOpacity={0.7}
               >
                 <View style={[styles.optionIcon, { backgroundColor: '#4285F4' }]}>
                   <IconSymbol name="location.fill" size={24} color="#FFFFFF" />
                 </View>
                 <View style={styles.optionTextContainer}>
-                  <ThemedText style={[
-                    styles.optionTitle,
-                    !isGoogleMapsInstalled && styles.optionTitleDisabled,
-                  ]}>
+                  <ThemedText style={styles.optionTitle}>
                     Google Maps
                   </ThemedText>
-                  <ThemedText style={[
-                    styles.optionSubtitle,
-                    !isGoogleMapsInstalled && styles.optionSubtitleDisabled,
-                  ]}>
-                    {isGoogleMapsInstalled === null
-                      ? 'Checking...'
-                      : isGoogleMapsInstalled
-                        ? 'Turn-by-turn navigation'
-                        : 'Not installed'
-                    }
+                  <ThemedText style={styles.optionSubtitle}>
+                    Turn-by-turn navigation
                   </ThemedText>
                 </View>
-                {isGoogleMapsInstalled ? (
-                  <View style={[
-                    styles.radioOuter,
-                    selectedApp === 'google' && styles.radioOuterSelected,
-                  ]}>
-                    {selectedApp === 'google' && <View style={styles.radioInner} />}
-                  </View>
-                ) : (
-                  <View style={styles.connectButton}>
-                    <ThemedText style={styles.connectButtonText}>Connect</ThemedText>
-                  </View>
-                )}
+                <View style={[
+                  styles.radioOuter,
+                  { borderColor: colors.border },
+                  selectedApp === 'google' && styles.radioOuterSelected,
+                ]}>
+                  {selectedApp === 'google' && <View style={styles.radioInner} />}
+                </View>
               </TouchableOpacity>
             </View>
 
             {/* Action Buttons */}
             <View style={[styles.buttonContainer, { paddingBottom: bottomPadding }]}>
               <TouchableOpacity
-                style={styles.cancelButton}
+                style={[styles.cancelButton, { borderColor: colors.border }]}
                 onPress={onClose}
                 activeOpacity={0.7}
               >
@@ -198,6 +148,7 @@ export function NavigationAppSelectorModal({
               <TouchableOpacity
                 style={[
                   styles.sendButton,
+                  { backgroundColor: mapColors.route.driving.main },
                   isExporting && styles.sendButtonDisabled,
                 ]}
                 onPress={handleSend}
@@ -285,9 +236,6 @@ const styles = StyleSheet.create({
     borderColor: tailwind.blue500,
     backgroundColor: `${tailwind.blue500}10`,
   },
-  optionButtonDisabled: {
-    opacity: 0.7,
-  },
   optionIcon: {
     width: 48,
     height: 48,
@@ -304,15 +252,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 2,
   },
-  optionTitleDisabled: {
-    color: tailwind.gray400,
-  },
   optionSubtitle: {
     fontSize: 13,
-    color: tailwind.gray500,
-  },
-  optionSubtitleDisabled: {
-    color: tailwind.gray400,
   },
   radioOuter: {
     width: 24,
@@ -331,17 +272,6 @@ const styles = StyleSheet.create({
     height: 12,
     borderRadius: 6,
     backgroundColor: tailwind.blue500,
-  },
-  connectButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: tailwind.blue500,
-  },
-  connectButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#FFFFFF',
   },
   buttonContainer: {
     flexDirection: 'row',
@@ -368,7 +298,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     padding: 16,
     borderRadius: 12,
-    backgroundColor: MapColors.route.driving.main,
+    backgroundColor: '#FFD700',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,

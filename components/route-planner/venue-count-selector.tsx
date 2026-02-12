@@ -46,7 +46,7 @@ export function VenueCountSelector({
   return (
     <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { borderBottomColor: colors.border }]}>
         <TouchableOpacity onPress={onCancel} style={styles.headerButton}>
           <ThemedText style={[styles.headerButtonText, { color: colors.tint }]}>
             Cancel
@@ -118,9 +118,8 @@ export function VenueCountSelector({
                 key={preset}
                 style={[
                   styles.presetButton,
+                  { borderColor: count === preset ? colors.tint : colors.border, backgroundColor: count === preset ? colors.tint : colors.surface },
                   count === preset && styles.presetButtonActive,
-                  { borderColor: count === preset ? colors.tint : tailwind.gray200 },
-                  count === preset && { backgroundColor: colors.tint },
                 ]}
                 onPress={() => handlePresetPress(preset)}
               >
@@ -241,7 +240,6 @@ const styles = StyleSheet.create({
   presetButtonText: {
     fontSize: 16,
     fontWeight: '600',
-    color: tailwind.gray700,
   },
   presetButtonTextActive: {
     color: '#FFFFFF',

@@ -1,9 +1,15 @@
 import { View, TouchableOpacity, StyleSheet } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { googlePlaceToRouteStop, GooglePlaceNew } from '@/lib/google-places';
+import { inferStopTypeFromGoogleTypes, GooglePlaceNew } from '@/lib/google-places';
 import { STOP_ICON_MAPPING } from '@/constants/stop-icons';
-import { tailwind } from '@/constants/theme';
+import { Colors, tailwind } from '@/constants/theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
+
+const DURATION_BY_TYPE: Record<string, number> = {
+  restaurant: 90, cafe: 45, bar: 60, park: 45,
+  museum: 90, theater: 120, viewpoint: 30, activity: 60, shopping: 60,
+};
 
 export function StarRating({ rating, count }: { rating?: number; count?: number }) {
   if (!rating) return null;
@@ -32,6 +38,7 @@ interface SuggestionCardProps {
   selectLabel?: string;
   nearestStopDistance?: number; // miles
   nearestStopName?: string;
+  compact?: boolean;
 }
 
 function estimateTravelMinutes(distanceMiles: number): number {
@@ -39,15 +46,27 @@ function estimateTravelMinutes(distanceMiles: number): number {
   return Math.max(1, Math.ceil(distanceMiles * 2)); // ~30 mph city driving
 }
 
-export function SuggestionCard({ place, onSelect, selectLabel, nearestStopDistance }: SuggestionCardProps) {
-  const stop = googlePlaceToRouteStop(place, 0);
-  if (!stop) return null;
-  const iconConfig = STOP_ICON_MAPPING[stop.type];
+export function SuggestionCard({ place, onSelect, selectLabel, nearestStopDistance, compact }: SuggestionCardProps) {
+  const colorScheme = useColorScheme();
+  const colors = Colors[colorScheme ?? 'light'];
+  if (!place.displayName?.text || !place.location ||
+      typeof place.location.latitude !== 'number' ||
+      typeof place.location.longitude !== 'number' ||
+      (place.location.latitude === 0 && place.location.longitude === 0)) {
+    return null;
+  }
+  const stopType = inferStopTypeFromGoogleTypes(place.types || []);
+  const iconConfig = STOP_ICON_MAPPING[stopType] || STOP_ICON_MAPPING.activity;
+  const estimatedDuration = DURATION_BY_TYPE[stopType] || 60;
   const isOpen = place.currentOpeningHours?.openNow ?? place.regularOpeningHours?.openNow;
 
   return (
     <TouchableOpacity
-      style={cardStyles.card}
+      style={[
+        cardStyles.card,
+        { backgroundColor: colors.surface },
+        compact && { shadowOpacity: 0, elevation: 0, borderWidth: 1, borderColor: colors.border },
+      ]}
       onPress={() => onSelect(place)}
       activeOpacity={0.7}
     >
@@ -77,7 +96,10 @@ export function SuggestionCard({ place, onSelect, selectLabel, nearestStopDistan
         {isOpen != null && (
           <View style={[
             cardStyles.openBadge,
-            { backgroundColor: isOpen ? '#dcfce7' : '#fee2e2' },
+            { backgroundColor: isOpen
+                ? (colorScheme === 'dark' ? 'rgba(22, 163, 74, 0.15)' : '#dcfce7')
+                : (colorScheme === 'dark' ? 'rgba(220, 38, 38, 0.15)' : '#fee2e2')
+            },
           ]}>
             <View style={[
               cardStyles.openDot,
@@ -104,7 +126,7 @@ export function SuggestionCard({ place, onSelect, selectLabel, nearestStopDistan
             <>
               <IconSymbol name="clock" size={12} color={tailwind.gray500} />
               <ThemedText style={cardStyles.durationText}>
-                ~{stop.duration} min visit
+                ~{estimatedDuration} min visit
               </ThemedText>
             </>
           )}
@@ -112,7 +134,7 @@ export function SuggestionCard({ place, onSelect, selectLabel, nearestStopDistan
       </View>
 
       {/* Select indicator */}
-      <View style={cardStyles.selectRow}>
+      <View style={[cardStyles.selectRow, { borderTopColor: colors.border }]}>
         <ThemedText style={cardStyles.selectText}>
           {selectLabel || 'Tap to add this stop'}
         </ThemedText>
@@ -152,7 +174,6 @@ export const cardStyles = StyleSheet.create({
   name: {
     fontSize: 16,
     fontWeight: '700',
-    color: tailwind.gray900,
   },
   address: {
     fontSize: 13,
@@ -174,7 +195,6 @@ export const cardStyles = StyleSheet.create({
   ratingText: {
     fontSize: 13,
     fontWeight: '600',
-    color: tailwind.gray700,
     marginLeft: 4,
   },
   reviewCount: {

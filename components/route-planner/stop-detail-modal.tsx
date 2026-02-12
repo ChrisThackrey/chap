@@ -5,7 +5,8 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { Colors, MapColors } from '@/constants/theme';
+import { Colors } from '@/constants/theme';
+import { useMapColors } from '@/hooks/use-map-colors';
 import { RouteStop } from '@/types/route';
 import { getStopIcon } from '@/constants/stop-icons';
 import { buildDisplayPhotoUrl } from '@/lib/google-places';
@@ -42,7 +43,8 @@ interface StopDetailModalProps {
 
 export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveStop, isRemovingStop = false }: StopDetailModalProps) {
   const colorScheme = useColorScheme();
-  const colors = Colors[colorScheme ?? 'light'];
+  const colors = Colors[colorScheme];
+  const mapColors = useMapColors();
   const insets = useSafeAreaInsets();
 
   // Safe area padding inside the modal (for home indicator)
@@ -196,7 +198,7 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
                   {/* Remove button */}
                   {onRemoveStop && totalStops > 2 && (
                     <TouchableOpacity
-                      style={styles.removeButtonHeader}
+                      style={[styles.removeButtonHeader, colorScheme === 'dark' && { backgroundColor: 'rgba(220, 38, 38, 0.12)' }]}
                       onPress={handleRemoveStop}
                       disabled={isRemovingStop}
                     >
@@ -250,7 +252,7 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
                       </View>
                     )}
                     {stop.venueDetails.price !== undefined && (
-                      <View style={styles.priceContainer}>
+                      <View style={[styles.priceContainer, colorScheme === 'dark' && { backgroundColor: colors.surface }]}>
                         <ThemedText style={styles.priceText}>
                           {'$'.repeat(stop.venueDetails.price)}
                         </ThemedText>
@@ -260,7 +262,7 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
                       </View>
                     )}
                     {stop.venueDetails.verified && (
-                      <View style={styles.verifiedBadge}>
+                      <View style={[styles.verifiedBadge, colorScheme === 'dark' && { backgroundColor: 'rgba(16, 185, 129, 0.15)' }]}>
                         <IconSymbol name="checkmark.seal.fill" size={14} color="#10B981" />
                         <ThemedText style={styles.verifiedText}>Verified</ThemedText>
                       </View>
@@ -269,16 +271,16 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
                 )}
 
                 {/* Duration */}
-                <View style={styles.durationContainer}>
-                  <IconSymbol name="clock.fill" size={16} color={MapColors.route.driving.main} />
+                <View style={[styles.durationContainer, colorScheme === 'dark' && { backgroundColor: colors.surface }]}>
+                  <IconSymbol name="clock.fill" size={16} color={mapColors.route.driving.main} />
                   <ThemedText style={styles.duration}>{stop.duration} minutes</ThemedText>
                 </View>
 
                 {/* Limited Data Indicator */}
                 {stop.venueDetails?.provider === 'geocoding' && (
-                  <View style={styles.limitedDataBadge}>
+                  <View style={[styles.limitedDataBadge, colorScheme === 'dark' && { backgroundColor: 'rgba(217, 119, 6, 0.15)' }]}>
                     <IconSymbol name="info.circle" size={14} color="#D97706" />
-                    <ThemedText style={styles.limitedDataText}>
+                    <ThemedText style={[styles.limitedDataText, colorScheme === 'dark' && { color: '#FBBF24' }]}>
                       Limited venue details available
                     </ThemedText>
                   </View>
@@ -301,7 +303,7 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
                       <Image
                         key={index}
                         source={{ uri: buildDisplayPhotoUrl(photo, '200x150') }}
-                        style={styles.thumbnailPhoto}
+                        style={[styles.thumbnailPhoto, colorScheme === 'dark' && { backgroundColor: colors.surface }]}
                         contentFit="cover"
                         transition={200}
                       />
@@ -310,9 +312,9 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
                 )}
 
                 {/* Address Section */}
-                <View style={styles.addressSection}>
+                <View style={[styles.addressSection, colorScheme === 'dark' && { backgroundColor: colors.surface }]}>
                   <View style={styles.addressHeader}>
-                    <IconSymbol name="mappin.circle.fill" size={20} color={MapColors.route.driving.main} />
+                    <IconSymbol name="mappin.circle.fill" size={20} color={mapColors.route.driving.main} />
                     <ThemedText style={styles.addressLabel}>Address</ThemedText>
                   </View>
                   <ThemedText style={styles.addressStreet}>{addressParts.street}</ThemedText>
@@ -337,12 +339,13 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
             </ScrollView>
 
             {/* Action Buttons - Fixed at bottom, outside ScrollView */}
-            <View style={styles.directionsContainer}>
+            <View style={[styles.directionsContainer, { backgroundColor: colors.background, borderTopColor: colors.border }]}>
               {/* Remove Stop Button - Always visible */}
               <TouchableOpacity
                 style={[
                   styles.removeButton,
-                  (isRemovingStop || totalStops <= 2) && styles.removeButtonDisabled
+                  (isRemovingStop || totalStops <= 2) && styles.removeButtonDisabled,
+                  colorScheme === 'dark' && { backgroundColor: 'rgba(220, 38, 38, 0.12)' }
                 ]}
                 onPress={handleRemoveStop}
                 activeOpacity={0.7}
@@ -363,7 +366,7 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
                 )}
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.directionsButton, { backgroundColor: MapColors.route.driving.main }]}
+                style={[styles.directionsButton, { backgroundColor: mapColors.route.driving.main }]}
                 onPress={handleGetDirections}
               >
                 <IconSymbol name="arrow.triangle.turn.up.right.diamond.fill" size={20} color="#FFFFFF" />
@@ -502,7 +505,6 @@ const styles = StyleSheet.create({
   closeButtonText: {
     fontSize: 20,
     fontWeight: '400',
-    color: '#374151',
   },
   content: {
     padding: 20,
@@ -598,7 +600,6 @@ const styles = StyleSheet.create({
   duration: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#374151',
   },
   limitedDataBadge: {
     flexDirection: 'row',
@@ -618,7 +619,6 @@ const styles = StyleSheet.create({
   description: {
     fontSize: 15,
     lineHeight: 23,
-    color: '#4B5563',
   },
   photoScroll: {
     marginHorizontal: -20,
@@ -649,18 +649,15 @@ const styles = StyleSheet.create({
   addressLabel: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#6B7280',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   addressStreet: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#1F2937',
   },
   addressCityZip: {
     fontSize: 15,
-    color: '#4B5563',
   },
   directionsContainer: {
     paddingHorizontal: 20,

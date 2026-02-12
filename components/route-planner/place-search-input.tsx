@@ -55,7 +55,7 @@ export function PlaceSearchInput({
           radiusMeters,
         );
         if (!controller.signal.aborted) {
-          setResults(places.slice(0, 5));
+          setResults(places.filter(p => p.displayName?.text).slice(0, 5));
           setHasSearched(true);
         }
       } catch (err) {

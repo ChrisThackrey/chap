@@ -75,73 +75,88 @@ export const Colors = {
     surfaceHover: tailwind.gray100,
   },
   dark: {
-    text: tailwind.slate300,
-    background: tailwind.slate900,
+    text: tailwind.gray200,
+    background: tailwind.gray900,
     tint: tintColorDark,
-    icon: tailwind.slate400,
-    tabIconDefault: tailwind.slate400,
+    icon: tailwind.gray400,
+    tabIconDefault: tailwind.gray400,
     tabIconSelected: tintColorDark,
     // Extended palette
-    textSecondary: tailwind.slate400,
-    border: tailwind.slate800,
-    surface: tailwind.slate800,
-    surfaceHover: tailwind.gray800,
+    textSecondary: tailwind.gray400,
+    border: tailwind.gray700,
+    surface: tailwind.gray800,
+    surfaceHover: tailwind.gray700,
   },
 };
 
 /**
  * Map-specific color palette for route visualization
  * Uses classic gold/green route colors for good visibility
+ * Structured as { light, dark } to match the Colors pattern
  */
-export const MapColors = {
-  // Route line colors - gold for driving, green for walking
+const sharedMapColors = {
   route: {
     driving: {
-      main: '#FFD700',                  // Gold - primary driving route
-      glow: '#FFF8DC',                  // Cornsilk - inner glow
-      shadow: 'rgba(0, 0, 0, 0.3)',     // Dark shadow for depth
+      main: '#FFD700',
+      glow: '#FFF8DC',
+      shadow: 'rgba(0, 0, 0, 0.3)',
     },
     walking: {
-      main: '#4CAF50',                  // Green - walking route
-      glow: '#81C784',                  // Light green - inner glow
-      shadow: 'rgba(0, 0, 0, 0.3)',     // Dark shadow for depth
+      main: '#4CAF50',
+      glow: '#81C784',
+      shadow: 'rgba(0, 0, 0, 0.3)',
     },
   },
-
-  // Offset indicator line (for overlapping stops)
   offsetIndicator: tailwind.slate500,
-
-  // Radius selector circle (uses blue500 #3B82F6 = rgb(59, 130, 246))
   radius: {
-    stroke: `${tailwind.blue500}CC`,     // Blue stroke with 80% opacity
-    fill: `${tailwind.blue500}1F`,       // Light blue fill with 12% opacity
+    stroke: `${tailwind.blue500}CC`,
+    fill: `${tailwind.blue500}1F`,
   },
-
-  // Map control buttons
-  controls: {
-    background: '#FFFFFF',
-    backgroundPressed: tailwind.gray100,
-    icon: tailwind.gray700,
-    border: tailwind.gray200,
-    shadow: 'rgba(0, 0, 0, 0.1)',
-  },
-
-  // Floating labels
-  label: {
-    background: 'rgba(255, 255, 255, 0.98)',
-    text: tailwind.gray800,
-    border: `${tailwind.blue500}33`,    // Blue with 20% opacity
-    shadow: 'rgba(0, 0, 0, 0.1)',
-  },
-
-  // Parking marker
   parking: tailwind.blue500,
+};
 
-  // Loading indicator
-  loading: {
-    background: 'rgba(255, 255, 255, 0.98)',
-    spinner: tailwind.blue500,
-    text: tailwind.gray700,
+export const MapColors = {
+  light: {
+    ...sharedMapColors,
+    controls: {
+      background: '#FFFFFF',
+      backgroundPressed: tailwind.gray100,
+      icon: tailwind.gray700,
+      border: tailwind.gray200,
+      shadow: 'rgba(0, 0, 0, 0.1)',
+    },
+    label: {
+      background: 'rgba(255, 255, 255, 0.98)',
+      text: tailwind.gray800,
+      border: `${tailwind.blue500}33`,
+      shadow: 'rgba(0, 0, 0, 0.1)',
+    },
+    loading: {
+      background: 'rgba(255, 255, 255, 0.98)',
+      spinner: tailwind.blue500,
+      text: tailwind.gray700,
+    },
+  },
+  dark: {
+    ...sharedMapColors,
+    controls: {
+      background: tailwind.gray800,
+      backgroundPressed: tailwind.gray700,
+      icon: tailwind.gray200,
+      border: tailwind.gray600,
+      shadow: 'rgba(0, 0, 0, 0.3)',
+    },
+    label: {
+      background: 'rgba(31, 41, 55, 0.98)',
+      text: tailwind.gray200,
+      border: `${tailwind.blue400}33`,
+      shadow: 'rgba(0, 0, 0, 0.3)',
+    },
+    loading: {
+      background: 'rgba(31, 41, 55, 0.98)',
+      spinner: tailwind.blue400,
+      text: tailwind.gray200,
+    },
   },
 };
 
