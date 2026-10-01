@@ -13,12 +13,11 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "We need your location to suggest date spots near you.",
         "ITSAppUsesNonExemptEncryption": false,
-        "LSApplicationQueriesSchemes": ["comgooglemaps"]
+        "LSApplicationQueriesSchemes": [
+          "comgooglemaps"
+        ]
       },
-      "bundleIdentifier": "com.thacken5.chap",
-      "config": {
-        "googleMapsApiKey": "REDACTED_GOOGLE_MAPS_API_KEY"
-      }
+      "bundleIdentifier": "com.thacken5.chap"
     },
     "android": {
       "adaptiveIcon": {
@@ -29,12 +28,10 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"],
-      "config": {
-        "googleMaps": {
-          "apiKey": "REDACTED_GOOGLE_MAPS_API_KEY"
-        }
-      },
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ],
       "package": "com.thacken5.chap"
     },
     "web": {
@@ -54,7 +51,9 @@
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      "expo-web-browser",
+      "./plugins/with-ios-pod-deployment-target.js"
     ],
     "experiments": {
       "typedRoutes": true,
@@ -64,8 +63,7 @@
       "router": {},
       "eas": {
         "projectId": "fb49c8e3-8992-431c-81ed-7ad9ff937bc9"
-      },
-      "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "REDACTED_GOOGLE_MAPS_API_KEY"
+      }
     }
   }
 }

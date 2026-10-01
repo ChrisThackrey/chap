@@ -1,59 +1,29 @@
-import { StopType } from '@/types/route';
+import type { IconSymbolName } from '@/components/ui/icon-symbol-names';
+import type { StopType } from '@/types/route';
 
 export interface StopIconConfig {
-  ios: string;
-  default: string;
+  /** Icon name from the shared icon table (SF Symbol on iOS, Material Icon elsewhere). */
+  icon: IconSymbolName;
   color: string;
 }
 
 export const STOP_ICON_MAPPING: Record<StopType, StopIconConfig> = {
-  restaurant: {
-    ios: 'fork.knife',
-    default: 'restaurant',
-    color: '#FF6B6B',
-  },
-  cafe: {
-    ios: 'cup.and.saucer.fill',
-    default: 'local-cafe',
-    color: '#8B4513',
-  },
-  bar: {
-    ios: 'wineglass.fill',
-    default: 'local-bar',
-    color: '#9B59B6',
-  },
-  park: {
-    ios: 'tree.fill',
-    default: 'park',
-    color: '#2ECC71',
-  },
-  museum: {
-    ios: 'building.columns.fill',
-    default: 'museum',
-    color: '#3498DB',
-  },
-  theater: {
-    ios: 'theatermasks.fill',
-    default: 'theaters',
-    color: '#E74C3C',
-  },
-  viewpoint: {
-    ios: 'eye.fill',
-    default: 'visibility',
-    color: '#F39C12',
-  },
-  activity: {
-    ios: 'figure.run',
-    default: 'directions-run',
-    color: '#1ABC9C',
-  },
-  shopping: {
-    ios: 'bag.fill',
-    default: 'shopping-bag',
-    color: '#E91E63',
-  },
+  restaurant: { icon: 'fork.knife', color: '#FF6B6B' },
+  cafe: { icon: 'cup.and.saucer.fill', color: '#8B4513' },
+  bar: { icon: 'wineglass.fill', color: '#9B59B6' },
+  park: { icon: 'tree.fill', color: '#2ECC71' },
+  museum: { icon: 'building.columns.fill', color: '#3498DB' },
+  theater: { icon: 'theatermasks.fill', color: '#E74C3C' },
+  viewpoint: { icon: 'eye.fill', color: '#F39C12' },
+  activity: { icon: 'figure.run', color: '#1ABC9C' },
+  shopping: { icon: 'bag.fill', color: '#E91E63' },
 };
 
-export function getStopIcon(type: StopType): StopIconConfig {
-  return STOP_ICON_MAPPING[type];
+/**
+ * Look up the icon config for a stop type. Unknown types (e.g. from older saved
+ * routes or unexpected AI output) fall back to the generic "activity" icon
+ * instead of crashing on an undefined config.
+ */
+export function getStopIcon(type: StopType | string | undefined): StopIconConfig {
+  return (type && STOP_ICON_MAPPING[type as StopType]) || STOP_ICON_MAPPING.activity;
 }

@@ -1,4 +1,4 @@
-import { View, TouchableOpacity, StyleSheet, Share, Alert } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, Share } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useColorScheme } from '@/hooks/use-color-scheme';
@@ -15,7 +15,11 @@ export function RouteSummary({ route, onSave, onRegenerate }: RouteSummaryProps)
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
 
-  const totalDuration = route.stops.reduce((sum, stop) => sum + stop.duration, 0);
+  // Older saved routes may have stops without a duration; treat those as 0 rather than NaN.
+  const totalDuration = route.stops.reduce(
+    (sum, stop) => sum + (Number.isFinite(stop.duration) ? stop.duration : 0),
+    0
+  );
   const hours = Math.floor(totalDuration / 60);
   const minutes = totalDuration % 60;
   const durationText = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
@@ -66,11 +70,6 @@ export function RouteSummary({ route, onSave, onRegenerate }: RouteSummaryProps)
     }
   };
 
-  const handleSave = () => {
-    onSave();
-    Alert.alert('Saved!', 'Route saved to your history');
-  };
-
   return (
     <ThemedView style={[styles.container, { borderBottomColor: colors.border }]}>
       <View style={styles.header}>
@@ -109,7 +108,7 @@ export function RouteSummary({ route, onSave, onRegenerate }: RouteSummaryProps)
       <View style={styles.actions}>
         <TouchableOpacity
           style={[styles.actionButton, { backgroundColor: colors.tint }]}
-          onPress={handleSave}
+          onPress={onSave}
         >
           <ThemedText style={styles.actionButtonText}>Save</ThemedText>
         </TouchableOpacity>

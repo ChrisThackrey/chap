@@ -2,51 +2,25 @@
 
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { SymbolWeight } from 'expo-symbols';
-import { ComponentProps } from 'react';
 import { OpaqueColorValue, type StyleProp, type TextStyle } from 'react-native';
 
-type IconMapping = Record<string, ComponentProps<typeof MaterialIcons>['name']>;
-type IconSymbolName = keyof typeof MAPPING;
+import { ICON_MAPPING, type IconSymbolName } from './icon-symbol-names';
 
-/**
- * Add your SF Symbols to Material Icons mappings here.
- * - see Material Icons in the [Icons Directory](https://icons.expo.fyi).
- * - see SF Symbols in the [SF Symbols](https://developer.apple.com/sf-symbols/) app.
- */
-const MAPPING = {
-  'house.fill': 'home',
-  'paperplane.fill': 'send',
-  'chevron.left.forwardslash.chevron.right': 'code',
-  'chevron.right': 'chevron-right',
-  'map.fill': 'map',
-  'fork.knife': 'restaurant',
-  'cup.and.saucer.fill': 'local-cafe',
-  'wineglass.fill': 'local-bar',
-  'tree.fill': 'park',
-  'building.columns.fill': 'museum',
-  'theatermasks.fill': 'theaters',
-  'eye.fill': 'visibility',
-  'figure.run': 'directions-run',
-  'bag.fill': 'shopping-bag',
-  'location.crosshairs': 'my-location',
-} as IconMapping;
+export type { IconSymbolName } from './icon-symbol-names';
 
-/**
- * An icon component that uses native SF Symbols on iOS, and Material Icons on Android and web.
- * This ensures a consistent look across platforms, and optimal resource usage.
- * Icon `name`s are based on SF Symbols and require manual mapping to Material Icons.
- */
-export function IconSymbol({
-  name,
-  size = 24,
-  color,
-  style,
-}: {
+export interface IconSymbolProps {
   name: IconSymbolName;
   size?: number;
   color: string | OpaqueColorValue;
   style?: StyleProp<TextStyle>;
   weight?: SymbolWeight;
-}) {
-  return <MaterialIcons color={color} size={size} name={MAPPING[name]} style={style} />;
+}
+
+/**
+ * An icon component that uses native SF Symbols on iOS, and Material Icons on Android and web.
+ * This ensures a consistent look across platforms, and optimal resource usage.
+ * Icon `name`s are based on SF Symbols and are mapped to Material Icons in `icon-symbol-names.ts`.
+ */
+export function IconSymbol({ name, size = 24, color, style }: IconSymbolProps) {
+  return <MaterialIcons color={color} size={size} name={ICON_MAPPING[name]} style={style} />;
 }

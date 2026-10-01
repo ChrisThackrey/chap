@@ -24,7 +24,9 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors, tailwind } from '@/constants/theme';
 import { Route, RouteStop } from '@/types/route';
 import { isGooglePlacesConfigured, GooglePlaceNew, googlePlaceToRouteStop, calculateDistance } from '@/lib/google-places';
-import { STOP_ICON_MAPPING } from '@/constants/stop-icons';
+import { getStopIcon } from '@/constants/stop-icons';
+import { milesToMeters } from '@/lib/geo-utils';
+import { DEFAULT_MAP_CENTER } from '@/lib/map-config';
 
 function orderByProximity(
   stops: RouteStop[],
@@ -70,10 +72,15 @@ export default function RoutePlannerScreen() {
   } = useRouteGeneration();
   const { location: deviceLocation, requestLocation } = useUserLocation();
   const { routes: savedRoutes, loading: loadingRoutes, saveRoute, deleteRoute } = useRouteStorage();
-  const { location: preferredLocation, saveLocation, getLocationContext } = useLocationPreference();
+  const {
+    location: preferredLocation,
+    loading: loadingLocationPreference,
+    saveLocation,
+    getLocationContext,
+  } = useLocationPreference();
   const { radius, saveRadius } = useRadiusPreference();
   const { venueCount, saveVenueCount } = useVenueCountPreference();
-  const [showLocationSelector, setShowLocationSelector] = useState(!preferredLocation);
+  const [showLocationSelector, setShowLocationSelector] = useState(false);
   const [showRadiusSelector, setShowRadiusSelector] = useState(false);
   const [showVenueCountSelector, setShowVenueCountSelector] = useState(false);
   const [showAddStopSuggestion, setShowAddStopSuggestion] = useState(false);
@@ -81,8 +88,6 @@ export default function RoutePlannerScreen() {
   const [pinnedStops, setPinnedStops] = useState<RouteStop[]>([]);
   const [showPlaceSearch, setShowPlaceSearch] = useState(false);
   const lastPromptRef = useRef<string>('');
-  const pinnedStopsRef = useRef<RouteStop[]>([]);
-  pinnedStopsRef.current = pinnedStops;
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme];
 
@@ -100,6 +105,18 @@ export default function RoutePlannerScreen() {
   }, [route, preferredLocation, deviceLocation]);
 
   const canAddMoreStops = canAddStop;
+  const radiusMiles = radius.radiusMiles;
+  const radiusMeters = milesToMeters(radiusMiles);
+  const stopCount = venueCount.count;
+
+  // Ask for a location only once the persisted preference has been read.
+  // Initialising from `!preferredLocation` opened the sheet on every launch,
+  // because the preference is still loading on the first render.
+  useEffect(() => {
+    if (!loadingLocationPreference && !preferredLocation) {
+      setShowLocationSelector(true);
+    }
+  }, [loadingLocationPreference, preferredLocation]);
 
   // Log validation warnings to console
   useEffect(() => {
@@ -128,21 +145,8 @@ export default function RoutePlannerScreen() {
     setShowAddStopSuggestion(false);
   }, [state, canAddMoreStops]);
 
-  // Merge pinned stops after AI generation succeeds
-  useEffect(() => {
-    if (state === 'success' && route && pinnedStopsRef.current.length > 0) {
-      const userLoc = preferredLocation
-        ? { latitude: preferredLocation.latitude, longitude: preferredLocation.longitude }
-        : deviceLocation;
-      const allStops = [...pinnedStopsRef.current, ...route.stops];
-      const ordered = orderByProximity(allStops, userLoc);
-      loadRoute({ ...route, stops: ordered });
-      setPinnedStops([]);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state]); // deliberately minimal deps to fire once on success transition
-
   const handleLocationSelected = async (location: LocationPreference) => {
+    // Errors propagate to LocationSelector, which renders them inline.
     await saveLocation(location);
     setShowLocationSelector(false);
   };
@@ -158,15 +162,14 @@ export default function RoutePlannerScreen() {
     }
 
     const locationContext = preferredLocation ? getLocationContext() : undefined;
-    const currentVenueCount = venueCount?.count || 3;
-    const aiVenueCount = Math.max(0, currentVenueCount - pinnedStops.length);
+    const aiVenueCount = Math.max(0, stopCount - pinnedStops.length);
 
     if (aiVenueCount === 0 && pinnedStops.length > 0) {
       createRouteFromStops(pinnedStops, 'Custom Route', {
         userLocation: userLoc || undefined,
         locationContext,
-        maxDistanceMiles: radius?.radiusMiles || 25,
-        venueCount: currentVenueCount,
+        maxDistanceMiles: radiusMiles,
+        venueCount: stopCount,
       }, prompt);
       setPinnedStops([]);
       return;
@@ -175,7 +178,7 @@ export default function RoutePlannerScreen() {
     await generatePlan(prompt, {
       userLocation: userLoc || undefined,
       locationContext,
-      maxDistanceMiles: radius?.radiusMiles || 25,
+      maxDistanceMiles: radiusMiles,
       venueCount: aiVenueCount,
       pinnedStopNames: pinnedStops.length > 0 ? pinnedStops.map(s => s.name) : undefined,
     });
@@ -250,11 +253,11 @@ export default function RoutePlannerScreen() {
     createRouteFromStops(ordered, title, {
       userLocation: userLoc || undefined,
       locationContext: preferredLocation ? getLocationContext() : undefined,
-      maxDistanceMiles: radius?.radiusMiles || 25,
+      maxDistanceMiles: radiusMiles,
       venueCount: allStops.length,
     }, lastPromptRef.current || undefined);
     setPinnedStops([]);
-  }, [pinnedStops, preferredLocation, deviceLocation, createRouteFromStops, getLocationContext, radius]);
+  }, [pinnedStops, preferredLocation, deviceLocation, createRouteFromStops, getLocationContext, radiusMiles]);
 
   return (
     <ThemedView style={styles.container}>
@@ -280,7 +283,7 @@ export default function RoutePlannerScreen() {
           >
             <IconSymbol name="circle.dashed" size={16} color={colors.tint} />
             <ThemedText style={[styles.radiusBadgeText, { color: colors.tint }]}>
-              {radius?.radiusMiles || 25} mi
+              {radiusMiles} mi
             </ThemedText>
           </TouchableOpacity>
 
@@ -291,7 +294,7 @@ export default function RoutePlannerScreen() {
           >
             <IconSymbol name="mappin.and.ellipse" size={16} color={colors.tint} />
             <ThemedText style={[styles.radiusBadgeText, { color: colors.tint }]}>
-              {venueCount?.count || 3} stops
+              {stopCount} stops
             </ThemedText>
           </TouchableOpacity>
         </View>
@@ -333,11 +336,13 @@ export default function RoutePlannerScreen() {
           userLocation={
             preferredLocation
               ? { latitude: preferredLocation.latitude, longitude: preferredLocation.longitude }
-              : deviceLocation || { latitude: 39.8283, longitude: -98.5795 }
+              : deviceLocation || DEFAULT_MAP_CENTER
           }
-          initialRadius={radius?.radiusMiles || 25}
+          initialRadius={radiusMiles}
           onConfirm={(miles) => {
-            saveRadius({ radiusMiles: miles });
+            saveRadius({ radiusMiles: miles }).catch(() => {
+              Alert.alert('Error', 'Could not save your search radius.');
+            });
             setShowRadiusSelector(false);
           }}
           onCancel={() => setShowRadiusSelector(false)}
@@ -351,9 +356,11 @@ export default function RoutePlannerScreen() {
         presentationStyle="pageSheet"
       >
         <VenueCountSelector
-          initialCount={venueCount?.count || 3}
+          initialCount={stopCount}
           onConfirm={(count) => {
-            saveVenueCount({ count });
+            saveVenueCount({ count }).catch(() => {
+              Alert.alert('Error', 'Could not save your stop count.');
+            });
             setShowVenueCountSelector(false);
           }}
           onCancel={() => setShowVenueCountSelector(false)}
@@ -370,9 +377,9 @@ export default function RoutePlannerScreen() {
                 {pinnedStops.map(stop => (
                   <View key={stop.id} style={[styles.pinnedChip, colorScheme === 'dark' && { backgroundColor: colors.surface }]}>
                     <IconSymbol
-                      name={STOP_ICON_MAPPING[stop.type].ios as any}
+                      name={getStopIcon(stop.type).icon}
                       size={14}
-                      color={STOP_ICON_MAPPING[stop.type].color}
+                      color={getStopIcon(stop.type).color}
                     />
                     <ThemedText style={styles.pinnedChipText} numberOfLines={1}>
                       {stop.name}
@@ -424,7 +431,7 @@ export default function RoutePlannerScreen() {
               ? { latitude: preferredLocation.latitude, longitude: preferredLocation.longitude }
               : deviceLocation
           }
-          radiusMeters={(radius?.radiusMiles || 25) * 1609}
+          radiusMeters={radiusMeters}
           pinnedStops={pinnedStops}
           onComplete={handleBuilderComplete}
           onDismiss={cancelBuilding}
@@ -432,16 +439,25 @@ export default function RoutePlannerScreen() {
       )}
 
       {state === 'error' && (
-        <ThemedView style={styles.errorContainer}>
+        <ScrollView contentContainerStyle={styles.errorContainer} keyboardShouldPersistTaps="handled">
           <ThemedText type="title" style={styles.errorTitle}>
             Oops! Something went wrong
           </ThemedText>
           <ThemedText style={styles.errorMessage}>{error}</ThemedText>
           <ThemedText style={styles.errorHint}>
-            Make sure you&apos;ve added your OpenAI API key to the .env file
+            Check your connection and API keys in the .env file, then try again
           </ThemedText>
           <PromptInput onGenerate={handleGenerate} loading={false} />
-        </ThemedView>
+          {/* Without this the only way out of the error state was another generation attempt. */}
+          <TouchableOpacity
+            style={[styles.errorBackButton, { borderColor: colors.border }]}
+            onPress={reset}
+            accessibilityRole="button"
+            accessibilityLabel="Back to start"
+          >
+            <ThemedText style={[styles.errorBackText, { color: colors.tint }]}>Back to start</ThemedText>
+          </TouchableOpacity>
+        </ScrollView>
       )}
 
       {state === 'success' && route && (
@@ -490,7 +506,7 @@ export default function RoutePlannerScreen() {
             visible={showAddStopModal}
             route={route}
             searchLocation={addStopSearchLocation}
-            radiusMeters={(radius?.radiusMiles || 25) * 1609}
+            radiusMeters={radiusMeters}
             onSelectStop={handleAddStopSelect}
             onDismiss={() => setShowAddStopModal(false)}
           />
@@ -512,7 +528,7 @@ export default function RoutePlannerScreen() {
                 ? { latitude: preferredLocation.latitude, longitude: preferredLocation.longitude }
                 : deviceLocation
             }
-            radiusMeters={(radius?.radiusMiles || 25) * 1609}
+            radiusMeters={radiusMeters}
             onSelectPlace={handlePinPlace}
             placeholder="Search by name..."
           />
@@ -585,9 +601,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   errorContainer: {
-    flex: 1,
-    padding: 20,
-    justifyContent: 'center',
+    paddingTop: 24,
+    paddingBottom: 40,
   },
   errorTitle: {
     fontSize: 24,
@@ -605,6 +620,18 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     textAlign: 'center',
     opacity: 0.7,
+  },
+  errorBackButton: {
+    alignSelf: 'center',
+    marginTop: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  errorBackText: {
+    fontSize: 15,
+    fontWeight: '600',
   },
   successContainer: {
     flex: 1,

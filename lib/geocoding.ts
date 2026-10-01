@@ -1,7 +1,7 @@
 import uuid from 'react-native-uuid';
 import { RouteStop } from '@/types/route';
 import { GeocodingResult } from '@/types/validation';
-import { scoreGeocodingResult, validateCoordinatesInRegion } from './geocoding-scorer';
+import { scoreGeocodingResult } from './geocoding-scorer';
 
 interface NominatimResponse {
   lat: string;

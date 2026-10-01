@@ -24,7 +24,9 @@ npm run web              # Run web version
 
 ### Code quality
 ```bash
-npm run lint             # Run ESLint (uses expo lint)
+npm run lint             # ESLint over the whole project (app, components, hooks, lib, ...)
+npm run typecheck        # tsc --noEmit
+npm run check            # typecheck + lint (run before committing)
 ```
 
 ### Project management
@@ -67,13 +69,31 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors } from '@/constants/theme';
 ```
 
+### Icons
+- `components/ui/icon-symbol-names.ts` is the single icon table: keys are SF Symbol names (iOS, via expo-symbols), values are Material Icons names (Android/web). Both sides are type-checked, and `IconSymbol` only accepts names from this table, so add new icons there.
+- Stop-type icons/colors live in `constants/stop-icons.ts`; use `getStopIcon(type)` (falls back to the activity icon for unknown types).
+
+### Maps
+- `lib/map-config.ts` holds the shared map provider (Google, or Apple inside Expo Go on iOS) and the light/dark map styles used by every `MapView`.
+- `RouteMap` remounts its `MapView` whenever the *set* of stops changes (`mapInstanceKey`). react-native-maps runs through Fabric's legacy-interop layer and inserting/reordering Marker children in place crashes with `insertReactSubview:atIndex` (SIGABRT). Keep marker/polyline keys stable and do not reintroduce incrementing "remount" keys.
+
+### External services
+- `lib/openai.ts` creates the OpenAI client lazily via `getOpenAIClient()`; a missing key surfaces as a user-facing error at generation time instead of crashing on import.
+- `lib/logger.ts` gates `debug`/`info` behind `__DEV__`; use it instead of `console.log` in lib code.
+- Persisted preferences (`hooks/use-*-preference.ts`, `hooks/use-route-storage.ts`) validate and sanitize JSON from AsyncStorage; never trust stored shapes directly.
+
+### Native build notes
+- `app.config.js` extends `app.json` and injects `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` into the native map SDK config. Never put API keys in `app.json`; the key must be in `.env` (or the EAS profile env) whenever `expo prebuild` / `expo run:*` / EAS builds run.
+- `ios/` and `android/` are generated (`expo prebuild`) and git-ignored.
+- `plugins/with-ios-pod-deployment-target.js` raises pod `IPHONEOS_DEPLOYMENT_TARGET` to 15.1 in the Podfile post_install; Xcode 26+ refuses to build several transitive pods otherwise.
+
 ## Platform Support
 - **iOS**: Supports tablets, uses SF Symbols for icons (via IconSymbol component)
 - **Android**: Edge-to-edge enabled, adaptive icons configured
 - **Web**: Static output, separate platform implementations where needed
 
 ## Important Configuration Files
-- `app.json` - Expo configuration (plugins, experiments, platform settings)
+- `app.json` + `app.config.js` - Expo configuration (plugins, experiments, platform settings); secrets come from env via `app.config.js`
 - `tsconfig.json` - Extends `expo/tsconfig.base` with strict mode
 - `eslint.config.js` - Uses Expo's flat ESLint config
 - `package.json` - Project metadata and scripts

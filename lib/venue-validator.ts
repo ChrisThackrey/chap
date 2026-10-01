@@ -1,5 +1,5 @@
 import uuid from 'react-native-uuid';
-import { RouteStop, UserLocation, VenueDetails } from '@/types/route';
+import { RouteStop, UserLocation } from '@/types/route';
 import { ValidationWarning, RouteValidationResult } from '@/types/validation';
 import {
   searchNearbyVenues as searchFoursquareVenues,
@@ -818,7 +818,7 @@ async function getSearchCenter(
     try {
       const result = await geocodeAddressWithScore(stop.address!);
       baseLocation = { latitude: result.lat, longitude: result.lon };
-    } catch (error) {
+    } catch {
       console.warn(`Could not geocode ${stop.address}, using fallback location`);
       baseLocation = { latitude: 39.8283, longitude: -98.5795 };
     }
@@ -1050,7 +1050,7 @@ async function validateStopWithGeocoding(
         console.log(`Reverse geocoded address for "${name}": ${streetAddress}`);
         resolvedAddress = streetAddress;
       }
-    } catch (reverseError) {
+    } catch {
       console.warn(`Reverse geocoding failed for ${name}, keeping original address`);
       // Keep original address if reverse geocoding fails
     }
@@ -1084,7 +1084,7 @@ async function validateStopWithGeocoding(
         console.log(`Reverse geocoded fallback address for "${name}": ${streetAddress}`);
         resolvedAddress = streetAddress;
       }
-    } catch (reverseError) {
+    } catch {
       console.warn(`Reverse geocoding also failed for ${name}, keeping original address`);
     }
   }

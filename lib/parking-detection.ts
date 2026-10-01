@@ -1,4 +1,4 @@
-import type { VenueDetails, ParkingLocation, RouteStop } from '@/types/route';
+import type { VenueDetails, RouteStop } from '@/types/route';
 
 /**
  * Parking Detection Service

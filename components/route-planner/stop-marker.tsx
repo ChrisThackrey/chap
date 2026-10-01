@@ -15,11 +15,7 @@ export function StopMarker({ type, stopNumber }: StopMarkerProps) {
   return (
     <View style={styles.container}>
       <View style={[styles.iconContainer, { backgroundColor: iconConfig.color }]}>
-        <IconSymbol
-          name={iconConfig.ios as any}
-          size={24}
-          color="#FFFFFF"
-        />
+        <IconSymbol name={iconConfig.icon} size={24} color="#FFFFFF" />
       </View>
       <View style={styles.badge}>
         <ThemedText style={styles.badgeText}>{stopNumber}</ThemedText>

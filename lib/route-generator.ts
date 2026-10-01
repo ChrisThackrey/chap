@@ -1,5 +1,7 @@
 import {
-  openai,
+  getOpenAIClient,
+  isOpenAIConfigured,
+  OpenAINotConfiguredError,
   MODEL,
   FALLBACK_MODEL,
   WEB_SEARCH_ENABLED,
@@ -8,11 +10,78 @@ import {
   WebSearchCitation,
 } from './openai';
 import { validateAndEnrichStops } from './venue-validator';
-import { Route, RouteStop, UserLocation, VenueCitation, RoutePlan } from '@/types/route';
+import { Route, RouteStop, UserLocation, VenueCitation, RoutePlan, RoutePlanStop, StopType } from '@/types/route';
 import { ValidationWarning } from '@/types/validation';
 import { containsWebSearchTriggers } from '@/constants/web-search-config';
 import { classifyError } from './error-classifier';
+import { logger } from './logger';
 import uuid from 'react-native-uuid';
+
+const STOP_TYPES: readonly StopType[] = [
+  'restaurant', 'cafe', 'bar', 'park', 'museum', 'theater', 'viewpoint', 'activity', 'shopping',
+];
+
+function isStopType(value: unknown): value is StopType {
+  return typeof value === 'string' && (STOP_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * Translate OpenAI SDK / network errors into messages a user can act on.
+ * The raw SDK message (e.g. "429 You have no credits remaining...") is kept in
+ * the logs but is not what we want on screen.
+ */
+export function toUserFacingGenerationError(error: unknown): Error {
+  if (error instanceof OpenAINotConfiguredError) return error;
+  const status = (error as { status?: unknown })?.status;
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (status === 401) {
+    return new Error('OpenAI rejected the API key. Check EXPO_PUBLIC_OPENAI_API_KEY in your .env file.');
+  }
+  if (status === 429) {
+    return new Error('OpenAI is rate-limiting this key or the account is out of credits. Check your OpenAI billing and try again shortly.');
+  }
+  if (typeof status === 'number' && status >= 500) {
+    return new Error('OpenAI is temporarily unavailable. Please try again in a moment.');
+  }
+  if (/network|fetch|timeout/i.test(message)) {
+    return new Error('Could not reach OpenAI. Check your internet connection and try again.');
+  }
+  return error instanceof Error ? error : new Error(message);
+}
+
+/** Shape of the JSON the model is asked to return for a full route. */
+interface GeneratedRouteData {
+  title: string;
+  stops: Partial<RouteStop>[];
+}
+
+/**
+ * Parse and validate model output. The JSON schema is `strict`, but a truncated
+ * or refused response can still arrive as an empty object; treat anything
+ * without a non-empty `stops` array as a generation failure rather than letting
+ * `undefined.forEach` crash downstream.
+ */
+function parseRouteData(content: string | null | undefined): GeneratedRouteData {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content || '{}');
+  } catch {
+    throw new Error('The AI returned an unreadable response. Please try again.');
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('The AI returned an unexpected response. Please try again.');
+  }
+  const data = parsed as { title?: unknown; stops?: unknown };
+  const stops = Array.isArray(data.stops) ? (data.stops as Partial<RouteStop>[]) : [];
+  if (stops.length === 0) {
+    throw new Error('The AI could not build a route for that request. Try rephrasing your prompt.');
+  }
+  return {
+    title: typeof data.title === 'string' && data.title.trim().length > 0 ? data.title : 'Your Date Route',
+    stops,
+  };
+}
 
 export interface RouteGenerationOptions {
   userLocation?: UserLocation;
@@ -99,7 +168,7 @@ function validateStopTypeUniqueness(stops: Partial<RouteStop>[]): {
   });
 
   const duplicates = Array.from(typeCounts.entries())
-    .filter(([_, count]) => count > 1)
+    .filter(([, count]) => count > 1)
     .map(([type, count]) => `${type} (${count}x)`);
 
   return {
@@ -283,7 +352,7 @@ async function generateRouteWithWebSearch(
   systemPrompt: string,
   userPrompt: string,
   locationContext?: string
-): Promise<{ routeData: any; citations: VenueCitation[]; webSearchUsed: boolean }> {
+): Promise<{ routeData: GeneratedRouteData; citations: VenueCitation[]; webSearchUsed: boolean }> {
   const parsedLocation = parseLocationContext(locationContext);
 
   const response = await createResponseWithSearch({
@@ -300,7 +369,7 @@ async function generateRouteWithWebSearch(
     },
   });
 
-  const routeData = JSON.parse(response.outputText || '{}');
+  const routeData = parseRouteData(response.outputText);
   const citations = convertCitations(response.citations);
 
   return {
@@ -317,8 +386,8 @@ async function generateRouteWithChatCompletions(
   systemPrompt: string,
   userPrompt: string,
   model: string = MODEL
-): Promise<{ routeData: any }> {
-  const response = await openai.chat.completions.create({
+): Promise<{ routeData: GeneratedRouteData }> {
+  const response = await getOpenAIClient().chat.completions.create({
     model,
     temperature: 0.7,
     messages: [
@@ -336,8 +405,7 @@ async function generateRouteWithChatCompletions(
   });
 
   const content = response.choices?.[0]?.message?.content;
-  const routeData = JSON.parse(content || '{}');
-  return { routeData };
+  return { routeData: parseRouteData(content) };
 }
 
 export async function generateRoute(
@@ -474,62 +542,56 @@ VENUE SELECTION STRATEGY:
 - Don't default to the same well-known spots every time - be creative and specific to the request`;
 
   // Helper: run LLM generation with fallback chain
-  const runGeneration = async (sysPrompt: string): Promise<{ routeData: any; citations: VenueCitation[]; webSearchUsed: boolean }> => {
+  const runGeneration = async (sysPrompt: string): Promise<{ routeData: GeneratedRouteData; citations: VenueCitation[]; webSearchUsed: boolean }> => {
     const useWebSearch = shouldTriggerWebSearch(prompt);
     if (useWebSearch) {
       try {
-        console.log('[RouteGenerator] Using GPT-4o with web search for hidden gem request');
+        logger.debug(`[RouteGenerator] Using ${MODEL} with web search for hidden gem request`);
         const webSearchResult = await generateRouteWithWebSearch(sysPrompt, prompt, locationContext);
         return { routeData: webSearchResult.routeData, citations: webSearchResult.citations, webSearchUsed: webSearchResult.webSearchUsed };
       } catch (webSearchError) {
+        if (webSearchError instanceof OpenAINotConfiguredError) throw webSearchError;
         const classified = classifyError(webSearchError);
-        console.warn('[RouteGenerator] Web search failed, falling back to GPT-4o:', classified.userMessage);
-        try {
-          console.log('[RouteGenerator] Falling back to GPT-4o Chat Completions');
-          const fallbackResult = await generateRouteWithChatCompletions(sysPrompt, prompt, MODEL);
-          return { routeData: fallbackResult.routeData, citations: [], webSearchUsed: false };
-        } catch (_gpt5Error) {
-          console.warn('[RouteGenerator] GPT-4o failed, falling back to GPT-4o');
-          const gpt4oResult = await generateRouteWithChatCompletions(sysPrompt, prompt, FALLBACK_MODEL);
-          return { routeData: gpt4oResult.routeData, citations: [], webSearchUsed: false };
-        }
+        logger.warn(`[RouteGenerator] Web search failed, falling back to ${MODEL}:`, classified.userMessage);
       }
-    } else {
-      try {
-        const result = await generateRouteWithChatCompletions(sysPrompt, prompt, MODEL);
-        return { routeData: result.routeData, citations: [], webSearchUsed: false };
-      } catch (_error) {
-        console.warn('[RouteGenerator] GPT-4o failed, falling back to GPT-4o');
-        const fallbackResult = await generateRouteWithChatCompletions(sysPrompt, prompt, FALLBACK_MODEL);
-        return { routeData: fallbackResult.routeData, citations: [], webSearchUsed: false };
-      }
+    }
+
+    try {
+      const result = await generateRouteWithChatCompletions(sysPrompt, prompt, MODEL);
+      return { routeData: result.routeData, citations: [], webSearchUsed: false };
+    } catch (primaryError) {
+      if (primaryError instanceof OpenAINotConfiguredError) throw primaryError;
+      logger.warn(`[RouteGenerator] ${MODEL} failed, falling back to ${FALLBACK_MODEL}:`, primaryError);
+      const fallbackResult = await generateRouteWithChatCompletions(sysPrompt, prompt, FALLBACK_MODEL);
+      return { routeData: fallbackResult.routeData, citations: [], webSearchUsed: false };
     }
   };
 
   // First attempt
-  let genResult = await runGeneration(systemPrompt);
+  let genResult: Awaited<ReturnType<typeof runGeneration>>;
+  try {
+    genResult = await runGeneration(systemPrompt);
+  } catch (error) {
+    logger.error('[RouteGenerator] Route generation failed:', error);
+    throw toUserFacingGenerationError(error);
+  }
   let { routeData, citations, webSearchUsed } = genResult;
 
   // Check for duplicate types — retry once with stricter prompt if found
   if (!allowDuplicates) {
     const firstCheck = validateStopTypeUniqueness(routeData.stops);
     if (!firstCheck.valid) {
-      console.warn('[RouteGenerator] Duplicate types on first attempt:', firstCheck.duplicates, '— retrying with stricter prompt');
-      const usedTypes = routeData.stops.map((s: any) => s.type).join(', ');
+      logger.warn('[RouteGenerator] Duplicate types on first attempt:', firstCheck.duplicates, '— retrying with stricter prompt');
+      const usedTypes = routeData.stops.map((s) => s.type).join(', ');
       const retryPrompt = systemPrompt + `\n\nRETRY — PREVIOUS ATTEMPT FAILED. You used these types: [${usedTypes}] which contains duplicates: ${firstCheck.duplicates.join(', ')}. You MUST use a DIFFERENT type for each stop. Do NOT repeat any type value.`;
       const retryResult = await runGeneration(retryPrompt);
       const retryCheck = validateStopTypeUniqueness(retryResult.routeData.stops);
-      if (retryCheck.valid) {
-        console.log('[RouteGenerator] Retry succeeded — no duplicate types');
-        routeData = retryResult.routeData;
-        citations = retryResult.citations;
-        webSearchUsed = retryResult.webSearchUsed;
-      } else {
-        console.warn('[RouteGenerator] Retry still has duplicates:', retryCheck.duplicates, '— using retry result anyway');
-        routeData = retryResult.routeData;
-        citations = retryResult.citations;
-        webSearchUsed = retryResult.webSearchUsed;
+      if (!retryCheck.valid) {
+        logger.warn('[RouteGenerator] Retry still has duplicates:', retryCheck.duplicates, '— using retry result anyway');
       }
+      routeData = retryResult.routeData;
+      citations = retryResult.citations;
+      webSearchUsed = retryResult.webSearchUsed;
     }
   }
 
@@ -550,14 +612,14 @@ VENUE SELECTION STRATEGY:
   const warnings = [...validationResult.warnings];
 
   if (!uniquenessCheck.valid && !allowDuplicates) {
-    console.warn('[RouteGenerator] Final route still has duplicate venue types:', uniquenessCheck.duplicates);
+    logger.warn('[RouteGenerator] Final route still has duplicate venue types:', uniquenessCheck.duplicates);
     warnings.push({
       severity: 'warning',
       message: `Route contains duplicate venue categories: ${uniquenessCheck.duplicates.join(', ')}. Consider regenerating for better variety.`,
       suggestedAction: 'Regenerate the route',
     });
   } else if (!uniquenessCheck.valid && allowDuplicates) {
-    console.log('[RouteGenerator] Duplicate types allowed by user request:', uniquenessCheck.duplicates);
+    logger.debug('[RouteGenerator] Duplicate types allowed by user request:', uniquenessCheck.duplicates);
   }
 
   // Add web search metadata to stops if citations were found
@@ -674,8 +736,12 @@ For each stop, return:
 The search queries should be specific enough to return relevant Google Places results. Include location context in each query.
 The first search query can target anywhere within the search radius. Later queries should progressively favor venues closer to where the previous stop would be located.`;
 
-  const callPlan = async (model: string) => {
-    const response = await openai.chat.completions.create({
+  if (!isOpenAIConfigured()) {
+    throw new OpenAINotConfiguredError();
+  }
+
+  const callPlan = async (model: string): Promise<unknown> => {
+    const response = await getOpenAIClient().chat.completions.create({
       model,
       temperature: 0.7,
       messages: [
@@ -692,25 +758,52 @@ The first search query can target anywhere within the search radius. Later queri
       },
     });
     const content = response.choices?.[0]?.message?.content;
-    return JSON.parse(content || '{}');
+    try {
+      return JSON.parse(content || '{}');
+    } catch {
+      throw new Error('The AI returned an unreadable plan. Please try again.');
+    }
   };
 
-  let planData: any;
+  let planData: unknown;
   try {
     planData = await callPlan(MODEL);
-  } catch (_err) {
-    console.warn('[RouteGenerator] Plan generation failed with primary model, trying fallback');
-    planData = await callPlan(FALLBACK_MODEL);
+  } catch (primaryError) {
+    logger.warn('[RouteGenerator] Plan generation failed with primary model, trying fallback:', primaryError);
+    try {
+      planData = await callPlan(FALLBACK_MODEL);
+    } catch (fallbackError) {
+      logger.error('[RouteGenerator] Plan generation failed:', fallbackError);
+      throw toUserFacingGenerationError(fallbackError);
+    }
+  }
+
+  const data = (planData && typeof planData === 'object' ? planData : {}) as { title?: unknown; stops?: unknown };
+  const rawStops = Array.isArray(data.stops) ? data.stops : [];
+
+  const stops: RoutePlanStop[] = rawStops
+    .map((raw, i): RoutePlanStop | null => {
+      if (!raw || typeof raw !== 'object') return null;
+      const s = raw as Record<string, unknown>;
+      const searchQuery = typeof s.searchQuery === 'string' ? s.searchQuery.trim() : '';
+      if (searchQuery.length === 0) return null;
+      const order = Number(s.order);
+      return {
+        searchQuery,
+        type: isStopType(s.type) ? s.type : 'activity',
+        description: typeof s.description === 'string' ? s.description : '',
+        order: Number.isFinite(order) ? order : i + 1,
+      };
+    })
+    .filter((s): s is RoutePlanStop => s !== null);
+
+  if (stops.length === 0) {
+    throw new Error('The AI could not plan any stops for that request. Try rephrasing your prompt.');
   }
 
   return {
-    title: planData.title || 'Your Route',
-    stops: (planData.stops || []).map((s: any, i: number) => ({
-      searchQuery: s.searchQuery || '',
-      type: s.type || 'activity',
-      description: s.description || '',
-      order: s.order ?? i + 1,
-    })).filter((s: any) => s.searchQuery.length > 0),
+    title: typeof data.title === 'string' && data.title.trim().length > 0 ? data.title : 'Your Route',
+    stops,
   };
 }
 

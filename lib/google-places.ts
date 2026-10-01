@@ -1,3 +1,5 @@
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 import { VenueDetails, VenuePhoto, StopType, ParkingLocation, RouteStop } from '@/types/route';
 import { extractParkingInfo } from './parking-detection';
 import uuid from 'react-native-uuid';
@@ -5,6 +7,26 @@ import uuid from 'react-native-uuid';
 // Use the same API key as Google Maps (should have Places API enabled)
 const GOOGLE_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 const GOOGLE_PLACES_BASE = 'https://places.googleapis.com/v1';
+
+/**
+ * Headers that identify this app to Google so an API key restricted to
+ * iOS bundle ids / Android packages still accepts REST calls (Places, Directions,
+ * photo media). Without them a restricted key returns 403 PERMISSION_DENIED.
+ */
+export const GOOGLE_APP_IDENTITY_HEADERS: Record<string, string> = ((): Record<string, string> => {
+  const iosBundleId = Constants.expoConfig?.ios?.bundleIdentifier;
+  const androidPackage = Constants.expoConfig?.android?.package;
+  if (Platform.OS === 'ios' && iosBundleId) {
+    return { 'X-Ios-Bundle-Identifier': iosBundleId };
+  }
+  if (Platform.OS === 'android' && androidPackage) {
+    // X-Android-Cert (signing SHA-1) is also required for Android app restrictions;
+    // it is only known at build time, so Android keys should be restricted by
+    // package + certificate in the Google Cloud console instead.
+    return { 'X-Android-Package': androidPackage };
+  }
+  return {};
+})();
 
 // Track if Google Places API has returned persistent errors
 let googlePlacesApiUnavailable = false;
@@ -68,16 +90,16 @@ export interface GooglePlaceNew {
   currentOpeningHours?: {
     openNow?: boolean;
   };
-  photos?: Array<{
+  photos?: {
     name: string;         // Photo resource name for retrieval
     widthPx: number;
     heightPx: number;
-  }>;
-  reviews?: Array<{
+  }[];
+  reviews?: {
     text: { text: string };
     rating: number;
     authorAttribution: { displayName: string };
-  }>;
+  }[];
   websiteUri?: string;
   internationalPhoneNumber?: string;
   businessStatus?: string;
@@ -192,6 +214,7 @@ export async function searchNearbyPlaces(
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': GOOGLE_API_KEY,
         'X-Goog-FieldMask': fieldMask,
+        ...GOOGLE_APP_IDENTITY_HEADERS,
       },
       body: JSON.stringify(requestBody),
     });
@@ -286,6 +309,7 @@ export async function getPlaceDetails(placeId: string): Promise<GooglePlaceNew |
       headers: {
         'X-Goog-Api-Key': GOOGLE_API_KEY,
         'X-Goog-FieldMask': fieldMask,
+        ...GOOGLE_APP_IDENTITY_HEADERS,
       },
     });
 
@@ -467,6 +491,18 @@ export function buildDisplayPhotoUrl(photo: VenuePhoto, size: string = '400x300'
 
   // Foursquare format
   return `${photo.prefix}${size}${photo.suffix}`;
+}
+
+/**
+ * Image source for a venue photo, including the app-identity headers that a
+ * bundle-id-restricted Google key requires for Places photo media requests.
+ */
+export function buildDisplayPhotoSource(photo: VenuePhoto, size: string = '400x300'): { uri: string; headers?: Record<string, string> } {
+  const uri = buildDisplayPhotoUrl(photo, size);
+  const isGooglePhoto = uri.startsWith(GOOGLE_PLACES_BASE) || uri.startsWith('https://maps.googleapis.com/');
+  return isGooglePhoto && Object.keys(GOOGLE_APP_IDENTITY_HEADERS).length > 0
+    ? { uri, headers: GOOGLE_APP_IDENTITY_HEADERS }
+    : { uri };
 }
 
 /**

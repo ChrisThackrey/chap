@@ -20,7 +20,7 @@ import {
   calculateDistance,
 } from '@/lib/google-places';
 import { Route, RouteStop, StopType } from '@/types/route';
-import { STOP_ICON_MAPPING } from '@/constants/stop-icons';
+import { getStopIcon } from '@/constants/stop-icons';
 import { Colors, tailwind } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { SuggestionCard } from './suggestion-card';
@@ -401,7 +401,7 @@ export function AddStopModal({
                 <ThemedText style={styles.sectionLabel}>Suggested for your route</ThemedText>
                 <View style={styles.chipGrid}>
                   {complementaryTypes.map(type => {
-                    const iconConfig = STOP_ICON_MAPPING[type] || STOP_ICON_MAPPING.activity;
+                    const iconConfig = getStopIcon(type);
                     return (
                       <TouchableOpacity
                         key={type}
@@ -409,11 +409,7 @@ export function AddStopModal({
                         onPress={() => handleComplementaryChipPress(type)}
                         activeOpacity={0.7}
                       >
-                        <IconSymbol
-                          name={iconConfig.ios as any}
-                          size={18}
-                          color={iconConfig.color}
-                        />
+                        <IconSymbol name={iconConfig.icon} size={18} color={iconConfig.color} />
                         <ThemedText style={styles.chipLabel}>
                           {type.charAt(0).toUpperCase() + type.slice(1)}
                         </ThemedText>

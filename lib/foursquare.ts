@@ -65,26 +65,26 @@ interface FoursquareVenue {
       longitude: number;
     };
   };
-  categories?: Array<{
+  categories?: {
     id: number;
     name: string;
-  }>;
+  }[];
   rating?: number;
   price?: number;
   hours?: {
     display?: string;
     is_open_now?: boolean;
   };
-  photos?: Array<{
+  photos?: {
     id: string;
     prefix: string;
     suffix: string;
     width: number;
     height: number;
-  }>;
-  tips?: Array<{
+  }[];
+  tips?: {
     text: string;
-  }>;
+  }[];
   website?: string;
   tel?: string;
   verified?: boolean;

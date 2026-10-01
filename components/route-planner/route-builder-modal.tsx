@@ -11,7 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { searchNearbyPlaces, googlePlaceToRouteStop, GooglePlaceNew, calculateDistance } from '@/lib/google-places';
-import { STOP_ICON_MAPPING } from '@/constants/stop-icons';
+import { getStopIcon } from '@/constants/stop-icons';
 import { SuggestionCard } from './suggestion-card';
 import { RoutePlan, RouteStop, StopType } from '@/types/route';
 import { Colors, tailwind } from '@/constants/theme';
@@ -353,18 +353,14 @@ export function RouteBuilderModal({
           <>
             {/* Category badge */}
             {currentPlanStop && (() => {
-              const iconCfg = STOP_ICON_MAPPING[currentPlanStop.type] || STOP_ICON_MAPPING.activity;
+              const iconCfg = getStopIcon(currentPlanStop.type);
               return (
                 <View style={styles.categoryRow}>
                   <View style={[
                     styles.categoryBadge,
                     { backgroundColor: iconCfg.color + '15' },
                   ]}>
-                    <IconSymbol
-                      name={iconCfg.ios as any}
-                      size={16}
-                      color={iconCfg.color}
-                    />
+                    <IconSymbol name={iconCfg.icon} size={16} color={iconCfg.color} />
                     <ThemedText style={[
                       styles.categoryText,
                       { color: iconCfg.color },
@@ -469,16 +465,12 @@ export function RouteBuilderModal({
 
               {plan.stops.map((planStop, i) => {
                 const selected = selectedStops.get(i);
-                const iconConfig = STOP_ICON_MAPPING[planStop.type] || STOP_ICON_MAPPING.activity;
+                const iconConfig = getStopIcon(planStop.type);
                 return (
                   <View key={i} style={[styles.confirmCard, { backgroundColor: colors.surface }]}>
                     <View style={styles.confirmCardHeader}>
                       <View style={[styles.confirmIcon, { backgroundColor: iconConfig.color + '18' }]}>
-                        <IconSymbol
-                          name={iconConfig.ios as any}
-                          size={20}
-                          color={iconConfig.color}
-                        />
+                        <IconSymbol name={iconConfig.icon} size={20} color={iconConfig.color} />
                       </View>
                       <View style={styles.confirmCardText}>
                         {selected ? (

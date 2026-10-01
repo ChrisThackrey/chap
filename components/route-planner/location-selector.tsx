@@ -5,20 +5,69 @@ import { ThemedView } from '@/components/themed-view';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors } from '@/constants/theme';
 import { IconSymbol } from '@/components/ui/icon-symbol';
-
-interface LocationInfo {
-  city?: string;
-  state?: string;
-  county?: string;
-  zipCode?: string;
-  latitude: number;
-  longitude: number;
-  displayName: string;
-}
+import type { LocationPreference as LocationInfo } from '@/hooks/use-location-preference';
+import { isValidCoordinate } from '@/lib/coordinate-validation';
 
 interface LocationSelectorProps {
-  onLocationSelected: (location: LocationInfo) => void;
+  onLocationSelected: (location: LocationInfo) => void | Promise<void>;
   currentLocation?: LocationInfo;
+}
+
+/** Nominatim usage policy requires an identifying User-Agent on every request. */
+const NOMINATIM_HEADERS = { 'User-Agent': 'ChapDatingApp/1.0', Accept: 'application/json' };
+const NOMINATIM_TIMEOUT_MS = 10_000;
+
+interface NominatimSearchResult {
+  lat?: string;
+  lon?: string;
+  display_name?: string;
+  address?: {
+    city?: string;
+    town?: string;
+    village?: string;
+    state?: string;
+    county?: string;
+    postcode?: string;
+  };
+}
+
+async function fetchNominatim(url: string): Promise<NominatimSearchResult[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), NOMINATIM_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { headers: NOMINATIM_HEADERS, signal: controller.signal });
+    if (!response.ok) {
+      throw new Error('Location service is unavailable right now. Please try again.');
+    }
+    const data: unknown = await response.json();
+    return Array.isArray(data) ? (data as NominatimSearchResult[]) : [];
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error('Location lookup timed out. Check your connection and try again.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Compact label for the location badge. Nominatim's display_name is a full
+ * hierarchy ("Austin, Travis County, Texas, United States") which wraps to
+ * several lines in the header badge; prefer "City, State" when known.
+ */
+function buildDisplayName(city: string | undefined, state: string | undefined, fallback: string): string {
+  if (city && state) return `${city}, ${state}`;
+  return city || state || fallback;
+}
+
+function parseCoordinates(result: NominatimSearchResult): { latitude: number; longitude: number } {
+  const latitude = parseFloat(result.lat ?? '');
+  const longitude = parseFloat(result.lon ?? '');
+  if (!isValidCoordinate(latitude, longitude)) {
+    throw new Error('Location service returned invalid coordinates');
+  }
+  return { latitude, longitude };
 }
 
 export function LocationSelector({ onLocationSelected, currentLocation }: LocationSelectorProps) {
@@ -34,30 +83,26 @@ export function LocationSelector({ onLocationSelected, currentLocation }: Locati
   const colors = Colors[colorScheme ?? 'light'];
 
   const geocodeZipCode = async (zip: string): Promise<LocationInfo> => {
-    const response = await fetch(
-      `https://nominatim.openstreetmap.org/search?postalcode=${zip}&country=US&format=json&addressdetails=1`
+    const data = await fetchNominatim(
+      `https://nominatim.openstreetmap.org/search?postalcode=${encodeURIComponent(zip)}&country=US&format=json&addressdetails=1&limit=1`
     );
 
-    if (!response.ok) {
-      throw new Error('Failed to geocode zip code');
-    }
-
-    const data = await response.json();
-
-    if (!data || data.length === 0) {
+    if (data.length === 0) {
       throw new Error('Zip code not found');
     }
 
     const result = data[0];
+    const address = result.address ?? {};
+    const coords = parseCoordinates(result);
+    const city = address.city || address.town || address.village;
 
     return {
       zipCode: zip,
-      city: result.address.city || result.address.town || result.address.village,
-      state: result.address.state,
-      county: result.address.county,
-      latitude: parseFloat(result.lat),
-      longitude: parseFloat(result.lon),
-      displayName: result.display_name,
+      city,
+      state: address.state,
+      county: address.county,
+      ...coords,
+      displayName: buildDisplayName(city, address.state, result.display_name || zip),
     };
   };
 
@@ -66,30 +111,24 @@ export function LocationSelector({ onLocationSelected, currentLocation }: Locati
       ? `${city}, ${county}, ${state}, USA`
       : `${city}, ${state}, USA`;
 
-    const response = await fetch(
+    const data = await fetchNominatim(
       `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&limit=1`
     );
 
-    if (!response.ok) {
-      throw new Error('Failed to geocode location');
-    }
-
-    const data = await response.json();
-
-    if (!data || data.length === 0) {
+    if (data.length === 0) {
       throw new Error('Location not found');
     }
 
     const result = data[0];
+    const coords = parseCoordinates(result);
 
     return {
-      city: city,
-      state: state,
-      county: county,
-      zipCode: result.address.postcode,
-      latitude: parseFloat(result.lat),
-      longitude: parseFloat(result.lon),
-      displayName: result.display_name,
+      city,
+      state,
+      county,
+      zipCode: result.address?.postcode,
+      ...coords,
+      displayName: buildDisplayName(city, state, result.display_name || query),
     };
   };
 
@@ -101,10 +140,11 @@ export function LocationSelector({ onLocationSelected, currentLocation }: Locati
       let locationInfo: LocationInfo;
 
       if (mode === 'zip') {
-        if (!zipCode.trim()) {
-          throw new Error('Please enter a zip code');
+        const zip = zipCode.trim();
+        if (!/^\d{5}$/.test(zip)) {
+          throw new Error('Please enter a valid 5-digit zip code');
         }
-        locationInfo = await geocodeZipCode(zipCode.trim());
+        locationInfo = await geocodeZipCode(zip);
       } else {
         if (!city.trim() || !state.trim()) {
           throw new Error('Please enter city and state');
@@ -116,7 +156,7 @@ export function LocationSelector({ onLocationSelected, currentLocation }: Locati
         );
       }
 
-      onLocationSelected(locationInfo);
+      await onLocationSelected(locationInfo);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to find location');
     } finally {
@@ -258,8 +298,8 @@ export function LocationSelector({ onLocationSelected, currentLocation }: Locati
 
       {/* Error Message */}
       {error && (
-        <View style={styles.errorContainer}>
-          <ThemedText style={styles.errorText}>⚠️ {error}</ThemedText>
+        <View style={[styles.errorContainer, colorScheme === 'dark' && { backgroundColor: 'rgba(220, 38, 38, 0.15)' }]}>
+          <ThemedText style={[styles.errorText, colorScheme === 'dark' && { color: '#FCA5A5' }]}>⚠️ {error}</ThemedText>
         </View>
       )}
 
@@ -292,7 +332,7 @@ export function LocationSelector({ onLocationSelected, currentLocation }: Locati
       </TouchableOpacity>
 
       <ThemedText style={styles.hint}>
-        💡 Routes will be planned within a 60-mile radius of this location
+        💡 Routes will be planned around this location, within your chosen search radius
       </ThemedText>
     </ThemedView>
   );

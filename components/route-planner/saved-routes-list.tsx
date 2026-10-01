@@ -60,6 +60,7 @@ export function SavedRoutesList({
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) return 'Unknown date';
     return date.toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',

@@ -1,71 +1,84 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const RADIUS_STORAGE_KEY = '@chap_radius_preference';
-const DEFAULT_RADIUS_MILES = 25;
+
+export const DEFAULT_RADIUS_MILES = 25;
+export const MIN_RADIUS_MILES = 1;
+export const MAX_RADIUS_MILES = 100;
 
 export interface RadiusPreference {
   radiusMiles: number; // 1-100 miles
 }
 
+const DEFAULT_RADIUS: RadiusPreference = { radiusMiles: DEFAULT_RADIUS_MILES };
+
+export function clampRadiusMiles(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_RADIUS_MILES;
+  return Math.min(MAX_RADIUS_MILES, Math.max(MIN_RADIUS_MILES, Math.round(value)));
+}
+
+function parseRadiusPreference(raw: string | null): RadiusPreference {
+  if (!raw) return DEFAULT_RADIUS;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return DEFAULT_RADIUS;
+    const radiusMiles = Number((parsed as Record<string, unknown>).radiusMiles);
+    if (!Number.isFinite(radiusMiles)) return DEFAULT_RADIUS;
+    return { radiusMiles: clampRadiusMiles(radiusMiles) };
+  } catch {
+    return DEFAULT_RADIUS;
+  }
+}
+
 export function useRadiusPreference() {
-  const [radius, setRadius] = useState<RadiusPreference | null>(null);
+  const [radius, setRadius] = useState<RadiusPreference>(DEFAULT_RADIUS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Load radius preference on mount
   useEffect(() => {
-    loadRadius();
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const stored = await AsyncStorage.getItem(RADIUS_STORAGE_KEY);
+        if (!cancelled) setRadius(parseRadiusPreference(stored));
+      } catch (err) {
+        console.error('Failed to load radius preference:', err);
+        if (!cancelled) setError('Failed to load saved radius');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const loadRadius = async () => {
-    try {
-      setLoading(true);
-      const stored = await AsyncStorage.getItem(RADIUS_STORAGE_KEY);
-
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        setRadius(parsed);
-      } else {
-        // Set default radius if none stored
-        setRadius({ radiusMiles: DEFAULT_RADIUS_MILES });
-      }
-    } catch (err) {
-      console.error('Failed to load radius preference:', err);
-      setError('Failed to load saved radius');
-      // Fall back to default on error
-      setRadius({ radiusMiles: DEFAULT_RADIUS_MILES });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const saveRadius = async (newRadius: RadiusPreference) => {
+  const saveRadius = useCallback(async (newRadius: RadiusPreference) => {
+    const clamped: RadiusPreference = { radiusMiles: clampRadiusMiles(newRadius.radiusMiles) };
     try {
       setError(null);
-      // Clamp radius to valid range
-      const clampedRadius = {
-        radiusMiles: Math.min(100, Math.max(1, newRadius.radiusMiles)),
-      };
-      await AsyncStorage.setItem(RADIUS_STORAGE_KEY, JSON.stringify(clampedRadius));
-      setRadius(clampedRadius);
+      await AsyncStorage.setItem(RADIUS_STORAGE_KEY, JSON.stringify(clamped));
+      setRadius(clamped);
     } catch (err) {
       console.error('Failed to save radius preference:', err);
       setError('Failed to save radius');
       throw err;
     }
-  };
+  }, []);
 
-  const clearRadius = async () => {
+  const clearRadius = useCallback(async () => {
     try {
       setError(null);
       await AsyncStorage.removeItem(RADIUS_STORAGE_KEY);
-      setRadius({ radiusMiles: DEFAULT_RADIUS_MILES });
+      setRadius(DEFAULT_RADIUS);
     } catch (err) {
       console.error('Failed to clear radius preference:', err);
       setError('Failed to clear radius');
     }
-  };
+  }, []);
 
   return {
     radius,

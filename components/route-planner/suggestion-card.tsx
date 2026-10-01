@@ -1,28 +1,30 @@
 import { View, TouchableOpacity, StyleSheet } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
-import { IconSymbol } from '@/components/ui/icon-symbol';
+import { IconSymbol, type IconSymbolName } from '@/components/ui/icon-symbol';
 import { inferStopTypeFromGoogleTypes, GooglePlaceNew } from '@/lib/google-places';
-import { STOP_ICON_MAPPING } from '@/constants/stop-icons';
+import { getStopIcon } from '@/constants/stop-icons';
 import { Colors, tailwind } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import type { StopType } from '@/types/route';
 
-const DURATION_BY_TYPE: Record<string, number> = {
+const DURATION_BY_TYPE: Record<StopType, number> = {
   restaurant: 90, cafe: 45, bar: 60, park: 45,
   museum: 90, theater: 120, viewpoint: 30, activity: 60, shopping: 60,
 };
 
 export function StarRating({ rating, count }: { rating?: number; count?: number }) {
-  if (!rating) return null;
-  const full = Math.floor(rating);
-  const half = rating - full >= 0.5;
-  const stars: string[] = [];
+  if (!rating || !Number.isFinite(rating)) return null;
+  const clamped = Math.max(0, Math.min(5, rating));
+  const full = Math.floor(clamped);
+  const half = clamped - full >= 0.5;
+  const stars: IconSymbolName[] = [];
   for (let i = 0; i < full; i++) stars.push('star.fill');
   if (half) stars.push('star.leadinghalf.filled');
 
   return (
     <View style={cardStyles.starsRow}>
       {stars.map((icon, i) => (
-        <IconSymbol key={i} name={icon as any} size={12} color="#F59E0B" />
+        <IconSymbol key={i} name={icon} size={12} color="#F59E0B" />
       ))}
       <ThemedText style={cardStyles.ratingText}>{rating.toFixed(1)}</ThemedText>
       {count != null && count > 0 && (
@@ -56,7 +58,7 @@ export function SuggestionCard({ place, onSelect, selectLabel, nearestStopDistan
     return null;
   }
   const stopType = inferStopTypeFromGoogleTypes(place.types || []);
-  const iconConfig = STOP_ICON_MAPPING[stopType] || STOP_ICON_MAPPING.activity;
+  const iconConfig = getStopIcon(stopType);
   const estimatedDuration = DURATION_BY_TYPE[stopType] || 60;
   const isOpen = place.currentOpeningHours?.openNow ?? place.regularOpeningHours?.openNow;
 
@@ -73,11 +75,7 @@ export function SuggestionCard({ place, onSelect, selectLabel, nearestStopDistan
       {/* Header row: icon + name + type badge */}
       <View style={cardStyles.headerRow}>
         <View style={[cardStyles.iconCircle, { backgroundColor: iconConfig.color + '18' }]}>
-          <IconSymbol
-            name={iconConfig.ios as any}
-            size={22}
-            color={iconConfig.color}
-          />
+          <IconSymbol name={iconConfig.icon} size={22} color={iconConfig.color} />
         </View>
         <View style={cardStyles.headerText}>
           <ThemedText style={cardStyles.name} numberOfLines={1}>

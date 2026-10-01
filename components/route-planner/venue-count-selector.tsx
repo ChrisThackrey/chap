@@ -1,11 +1,17 @@
 import { useState } from 'react';
-import { View, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedView } from '@/components/themed-view';
 import { ThemedText } from '@/components/themed-text';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors, tailwind } from '@/constants/theme';
+import {
+  DEFAULT_VENUE_COUNT,
+  MAX_VENUE_COUNT as MAX_COUNT,
+  MIN_VENUE_COUNT as MIN_COUNT,
+  clampVenueCount,
+} from '@/hooks/use-venue-count-preference';
 
 interface VenueCountSelectorProps {
   initialCount: number;
@@ -14,18 +20,20 @@ interface VenueCountSelectorProps {
 }
 
 const PRESET_COUNTS = [2, 3, 4, 5, 6, 8];
-const MIN_COUNT = 2;
-const MAX_COUNT = 8;
 
 export function VenueCountSelector({
-  initialCount = 3,
+  initialCount = DEFAULT_VENUE_COUNT,
   onConfirm,
   onCancel,
 }: VenueCountSelectorProps) {
-  const [count, setCount] = useState(Math.min(MAX_COUNT, Math.max(MIN_COUNT, initialCount)));
+  const [count, setCount] = useState(clampVenueCount(initialCount));
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const insets = useSafeAreaInsets();
+  // Inside an iOS page-sheet modal the sheet already clears the status bar, but
+  // useSafeAreaInsets still reports the window inset; applying it leaves a
+  // large blank band above the header.
+  const sheetTopPadding = Platform.OS === 'ios' ? 8 : insets.top;
 
   const handlePresetPress = (preset: number) => {
     setCount(preset);
@@ -44,7 +52,7 @@ export function VenueCountSelector({
   };
 
   return (
-    <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
+    <ThemedView style={[styles.container, { paddingTop: sheetTopPadding }]}>
       {/* Header */}
       <View style={[styles.header, { borderBottomColor: colors.border }]}>
         <TouchableOpacity onPress={onCancel} style={styles.headerButton}>
@@ -106,7 +114,7 @@ export function VenueCountSelector({
 
         {/* Description */}
         <ThemedText style={styles.description}>
-          Choose how many venues you'd like in your route. More stops mean a longer experience!
+          Choose how many venues you&apos;d like in your route. More stops mean a longer experience!
         </ThemedText>
 
         {/* Preset buttons */}

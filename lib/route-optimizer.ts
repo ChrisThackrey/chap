@@ -4,7 +4,6 @@ import { searchParkingNearVenue as searchParkingFoursquare } from './foursquare'
 import {
   analyzeParkingAvailability,
   calculateWalkingThreshold,
-  isWalkingDistanceBetweenStops,
 } from './parking-detection';
 import { fetchCompleteRouteWithSegments } from './google-directions';
 

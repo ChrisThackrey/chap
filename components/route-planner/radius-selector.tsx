@@ -1,7 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { View, StyleSheet, TouchableOpacity, Platform, ActivityIndicator } from 'react-native';
-import MapView, { Circle, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import MapView, { Circle, Marker, type MarkerDragEvent, type MarkerDragStartEndEvent } from 'react-native-maps';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedView } from '@/components/themed-view';
@@ -9,48 +8,15 @@ import { ThemedText } from '@/components/themed-text';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { Colors, MapColors, tailwind } from '@/constants/theme';
+import { MAP_PROVIDER, getMapStyle } from '@/lib/map-config';
+import { logger } from '@/lib/logger';
+import { DEFAULT_RADIUS_MILES, clampRadiusMiles } from '@/hooks/use-radius-preference';
 import {
   milesToMeters,
   getPointAtBearing,
   calculateDistanceMiles,
   radiusToMapDeltas,
 } from '@/lib/geo-utils';
-
-// Pastel map style for Google Maps - tailwind-inspired soft colors (consistent with route-map)
-const PASTEL_MAP_STYLE = [
-  // Base geometry - soft gray from tailwind gray-50
-  { elementType: 'geometry', stylers: [{ color: '#F9FAFB' }] },
-  // Labels - gray-600 for readability
-  { elementType: 'labels.text.fill', stylers: [{ color: '#4B5563' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#FFFFFF' }] },
-  // Administrative boundaries - gray-300
-  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#D1D5DB' }] },
-  { featureType: 'administrative.land_parcel', elementType: 'labels.text.fill', stylers: [{ color: '#9CA3AF' }] },
-  // Roads - white with subtle gray stroke
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#FFFFFF' }] },
-  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#E5E7EB' }] },
-  { featureType: 'road.arterial', elementType: 'labels.text.fill', stylers: [{ color: '#6B7280' }] },
-  // Highways - soft amber/yellow tint (amber-100)
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#FEF3C7' }] },
-  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#FDE68A' }] },
-  { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#4B5563' }] },
-  { featureType: 'road.local', elementType: 'labels.text.fill', stylers: [{ color: '#9CA3AF' }] },
-  // Water - soft blue (blue-100)
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#DBEAFE' }] },
-  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#60A5FA' }] },
-  // Parks - soft emerald/green (emerald-100)
-  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#D1FAE5' }] },
-  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#059669' }] },
-  // Landscape - subtle warm tint
-  { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#F3F4F6' }] },
-  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#ECFDF5' }] },
-  // Hide POI labels for cleaner look
-  { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
-  { featureType: 'poi.business', stylers: [{ visibility: 'off' }] },
-  // Hide transit for cleaner look
-  { featureType: 'transit', elementType: 'labels', stylers: [{ visibility: 'off' }] },
-  { featureType: 'transit.station', stylers: [{ visibility: 'off' }] },
-];
 
 interface RadiusSelectorProps {
   userLocation: {
@@ -63,8 +29,6 @@ interface RadiusSelectorProps {
 }
 
 const PRESET_RADII = [5, 10, 25, 50, 100];
-const MIN_RADIUS = 1;
-const MAX_RADIUS = 100;
 
 // Colors for different interaction states
 const CIRCLE_COLORS = {
@@ -80,17 +44,21 @@ const CIRCLE_COLORS = {
 
 export function RadiusSelector({
   userLocation,
-  initialRadius = 25,
+  initialRadius = DEFAULT_RADIUS_MILES,
   onConfirm,
   onCancel,
 }: RadiusSelectorProps) {
-  const [radiusMiles, setRadiusMiles] = useState(initialRadius);
+  const [radiusMiles, setRadiusMiles] = useState(() => clampRadiusMiles(initialRadius));
   const [mapReady, setMapReady] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const mapRef = useRef<MapView>(null);
   const colorScheme = useColorScheme();
   const colors = Colors[colorScheme ?? 'light'];
   const insets = useSafeAreaInsets();
+  // Inside an iOS page-sheet modal the sheet already clears the status bar, but
+  // useSafeAreaInsets still reports the window inset; applying it leaves a
+  // large blank band above the header.
+  const sheetTopPadding = Platform.OS === 'ios' ? 8 : insets.top;
 
   // Calculate handle position (East of center)
   const handlePosition = useMemo(() => {
@@ -138,7 +106,7 @@ export function RadiusSelector({
   useEffect(() => {
     const timeout = setTimeout(() => {
       if (!mapReady) {
-        console.log('⚠️ RadiusSelector map ready timeout - forcing visible');
+        logger.warn('[RadiusSelector] Map did not report ready; forcing visible after timeout');
         setMapReady(true);
       }
     }, 3000);
@@ -147,23 +115,26 @@ export function RadiusSelector({
   }, [mapReady]);
 
   // Handle real-time drag updates for immediate circle feedback
-  const handleDrag = (e: any) => {
-    const { latitude, longitude } = e.nativeEvent.coordinate;
+  const updateRadiusFromCoordinate = (coordinate: { latitude: number; longitude: number }) => {
     const newRadius = calculateDistanceMiles(
       userLocation.latitude,
       userLocation.longitude,
-      latitude,
-      longitude
+      coordinate.latitude,
+      coordinate.longitude
     );
-    setRadiusMiles(Math.round(Math.min(MAX_RADIUS, Math.max(MIN_RADIUS, newRadius))));
+    setRadiusMiles(clampRadiusMiles(newRadius));
+  };
+
+  const handleDrag = (e: MarkerDragEvent) => {
+    updateRadiusFromCoordinate(e.nativeEvent.coordinate);
   };
 
   const handleDragStart = () => {
     setIsDragging(true);
   };
 
-  const handleDragEnd = (e: any) => {
-    handleDrag(e);
+  const handleDragEnd = (e: MarkerDragStartEndEvent) => {
+    updateRadiusFromCoordinate(e.nativeEvent.coordinate);
     setIsDragging(false);
   };
 
@@ -207,9 +178,11 @@ export function RadiusSelector({
     });
   }, [isDragging, handleScale]);
 
+  const controlBackground = colorScheme === 'dark' ? MapColors.dark.controls.background : 'rgba(255, 255, 255, 0.95)';
+  const labelBackground = MapColors[colorScheme].label.background;
+
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemedView style={[styles.container, { paddingTop: insets.top }]}>
+      <ThemedView style={[styles.container, { paddingTop: sheetTopPadding }]}>
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={onCancel} style={styles.headerButton}>
@@ -241,8 +214,8 @@ export function RadiusSelector({
           <MapView
             ref={mapRef}
             style={[styles.map, !mapReady && styles.mapHidden]}
-            provider={PROVIDER_GOOGLE}
-            customMapStyle={PASTEL_MAP_STYLE}
+            provider={MAP_PROVIDER}
+            customMapStyle={getMapStyle(colorScheme)}
             initialRegion={initialMapRegion}
             showsUserLocation={false}
             showsMyLocationButton={false}
@@ -250,14 +223,9 @@ export function RadiusSelector({
             zoomEnabled={true}
             rotateEnabled={false}
             pitchEnabled={false}
-            onMapReady={() => {
-              console.log('✅ RadiusSelector map ready');
-              setMapReady(true);
-            }}
-            onMapLoaded={() => {
-              console.log('✅ RadiusSelector map tiles loaded');
-              setMapReady(true);
-            }}
+            onMapReady={() => setMapReady(true)}
+            onMapLoaded={() => setMapReady(true)}
+            accessibilityLabel="Search radius map"
           >
             {/* Radius circle - changes color based on interaction */}
             <Circle
@@ -302,21 +270,25 @@ export function RadiusSelector({
 
           {/* Zoom to fit button - replaces double-tap gesture */}
           <TouchableOpacity
-            style={styles.zoomToFitButton}
+            style={[styles.zoomToFitButton, { backgroundColor: controlBackground }]}
             onPress={zoomToRadiusExtents}
             activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Zoom to fit radius"
           >
-            <IconSymbol name="arrow.up.left.and.arrow.down.right" size={18} color={tailwind.gray700} />
+            <IconSymbol name="arrow.up.left.and.arrow.down.right" size={18} color={MapColors[colorScheme].controls.icon} />
           </TouchableOpacity>
 
           {/* Radius display overlay */}
           <View style={[
             styles.radiusOverlay,
+            { backgroundColor: labelBackground },
             isDragging && styles.radiusOverlayActive,
             isDragging && { borderColor: `${tailwind.emerald500}40` },
           ]}>
             <ThemedText style={[
               styles.radiusText,
+              { color: MapColors[colorScheme].label.text },
               isDragging && styles.radiusTextActive,
             ]}>
               {radiusMiles} miles
@@ -333,13 +305,17 @@ export function RadiusSelector({
                 key={preset}
                 style={[
                   styles.presetButton,
+                  { backgroundColor: colors.surface, borderColor: colors.border },
                   radiusMiles === preset && styles.presetButtonActive,
                 ]}
                 onPress={() => handlePresetPress(preset)}
+                accessibilityRole="button"
+                accessibilityLabel={`${preset} mile radius`}
               >
                 <ThemedText
                   style={[
                     styles.presetButtonText,
+                    { color: colors.text },
                     radiusMiles === preset && styles.presetButtonTextActive,
                   ]}
                 >
@@ -356,7 +332,6 @@ export function RadiusSelector({
           All route stops will be within this distance.
         </ThemedText>
       </ThemedView>
-    </GestureHandlerRootView>
   );
 }
 
@@ -401,7 +376,6 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
@@ -441,7 +415,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 60,
     alignSelf: 'center',
-    backgroundColor: MapColors.light.label.background,
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 24,
@@ -460,7 +433,6 @@ const styles = StyleSheet.create({
   radiusText: {
     fontSize: 20,
     fontWeight: '700',
-    color: tailwind.gray800,
     letterSpacing: 0.3,
   },
   radiusTextActive: {
@@ -487,9 +459,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 12,
     borderWidth: 1.5,
-    borderColor: tailwind.gray200,
     alignItems: 'center',
-    backgroundColor: tailwind.gray50,
   },
   presetButtonActive: {
     backgroundColor: tailwind.indigo500,
@@ -498,7 +468,6 @@ const styles = StyleSheet.create({
   presetButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: tailwind.gray700,
   },
   presetButtonTextActive: {
     color: '#FFFFFF',

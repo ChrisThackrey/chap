@@ -1,5 +1,8 @@
 import Constants from 'expo-constants';
 import type { RouteCoordinate, TravelMode, RouteSegment } from '@/types/route';
+import { isValidCoordinateObject } from './coordinate-validation';
+import { GOOGLE_APP_IDENTITY_HEADERS } from './google-places';
+import { logger } from './logger';
 
 // Re-export for backward compatibility
 export type { RouteCoordinate } from '@/types/route';
@@ -11,28 +14,31 @@ export type { RouteCoordinate } from '@/types/route';
  * Returns decoded polyline coordinates for drawing routes on the map.
  */
 
-// Get API key from multiple possible sources
-const GOOGLE_MAPS_API_KEY =
+// Get API key from the env var first, falling back to the native map SDK key in app config.
+const GOOGLE_MAPS_API_KEY: string | undefined =
   process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ||
   Constants.expoConfig?.ios?.config?.googleMapsApiKey ||
-  Constants.expoConfig?.extra?.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+  Constants.expoConfig?.android?.config?.googleMaps?.apiKey;
 
-// Debug logging for API key configuration
-console.log('🔑 Google Directions API Key check:');
-console.log('   process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY:', process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ? 'SET' : 'NOT SET');
-console.log('   Constants.expoConfig?.ios?.config?.googleMapsApiKey:', Constants.expoConfig?.ios?.config?.googleMapsApiKey ? 'SET' : 'NOT SET');
-console.log('   Final key:', GOOGLE_MAPS_API_KEY ? `${GOOGLE_MAPS_API_KEY.substring(0, 10)}...` : 'NOT FOUND');
+if (!GOOGLE_MAPS_API_KEY) {
+  logger.warn('[GoogleDirections] No Google Maps API key configured; routes will fall back to straight lines.');
+}
+
+/** Per-request timeout; generous for mobile networks. */
+const FETCH_TIMEOUT_MS = 15_000;
+/** Minimum spacing between uncached Directions API calls to avoid rate limiting. */
+const MIN_FETCH_INTERVAL_MS = 500;
 
 interface DirectionsResponse {
-  routes: Array<{
+  routes: {
     overview_polyline: {
       points: string;
     };
-    legs: Array<{
+    legs: {
       distance: { text: string; value: number };
       duration: { text: string; value: number };
-    }>;
-  }>;
+    }[];
+  }[];
   status: string;
   error_message?: string;
 }
@@ -52,10 +58,9 @@ const directionsCache = new Map<string, DirectionsResult>();
  * @see https://developers.google.com/maps/documentation/utilities/polylinealgorithm
  */
 function decodePolyline(encoded: string): RouteCoordinate[] {
-  console.log(`🔍 [decodePolyline] Starting decode, input length: ${encoded.length}`);
 
   if (!encoded || typeof encoded !== 'string') {
-    console.error(`❌ [decodePolyline] Invalid input: ${typeof encoded}`);
+    logger.error(`❌ [decodePolyline] Invalid input: ${typeof encoded}`);
     throw new Error('Invalid polyline input');
   }
 
@@ -70,7 +75,7 @@ function decodePolyline(encoded: string): RouteCoordinate[] {
     while (index < encoded.length) {
       iterations++;
       if (iterations > maxIterations) {
-        console.error(`❌ [decodePolyline] Exceeded max iterations at index ${index}`);
+        logger.error(`❌ [decodePolyline] Exceeded max iterations at index ${index}`);
         throw new Error('Polyline decode exceeded max iterations');
       }
 
@@ -81,7 +86,7 @@ function decodePolyline(encoded: string): RouteCoordinate[] {
       // Decode latitude
       do {
         if (index >= encoded.length) {
-          console.error(`❌ [decodePolyline] Index out of bounds at ${index}`);
+          logger.error(`❌ [decodePolyline] Index out of bounds at ${index}`);
           throw new Error('Polyline decode: unexpected end of string');
         }
         b = encoded.charCodeAt(index++) - 63;
@@ -98,7 +103,7 @@ function decodePolyline(encoded: string): RouteCoordinate[] {
       // Decode longitude
       do {
         if (index >= encoded.length) {
-          console.error(`❌ [decodePolyline] Index out of bounds at ${index}`);
+          logger.error(`❌ [decodePolyline] Index out of bounds at ${index}`);
           throw new Error('Polyline decode: unexpected end of string');
         }
         b = encoded.charCodeAt(index++) - 63;
@@ -114,7 +119,7 @@ function decodePolyline(encoded: string): RouteCoordinate[] {
 
       // Validate decoded values
       if (isNaN(decodedLat) || isNaN(decodedLng)) {
-        console.error(`❌ [decodePolyline] NaN detected at iteration ${iterations}: lat=${decodedLat}, lng=${decodedLng}`);
+        logger.error(`❌ [decodePolyline] NaN detected at iteration ${iterations}: lat=${decodedLat}, lng=${decodedLng}`);
         throw new Error('Polyline decode produced NaN coordinates');
       }
 
@@ -123,11 +128,9 @@ function decodePolyline(encoded: string): RouteCoordinate[] {
         longitude: decodedLng,
       });
     }
-
-    console.log(`✅ [decodePolyline] Successfully decoded ${coordinates.length} coordinates in ${iterations} iterations`);
     return coordinates;
   } catch (error) {
-    console.error(`❌ [decodePolyline] Error during decode at index ${index}, iteration ${iterations}:`, error);
+    logger.error(`❌ [decodePolyline] Error during decode at index ${index}, iteration ${iterations}:`, error);
     throw error;
   }
 }
@@ -159,23 +162,19 @@ export async function fetchDirections(
 ): Promise<DirectionsResult | null> {
   // Check if already cancelled
   if (signal?.aborted) {
-    console.log('🚫 [fetchDirections] Already cancelled before starting');
+    logger.debug('🚫 [fetchDirections] Already cancelled before starting');
     throw new DOMException('Operation cancelled', 'AbortError');
   }
 
   // Check cache first
   const cacheKey = getCacheKey(origin, destination, mode);
-  console.log(`🔍 [fetchDirections] Checking cache for key: ${cacheKey.substring(0, 60)}...`);
-  console.log(`🔍 [fetchDirections] Cache size: ${directionsCache.size} entries`);
   const cached = directionsCache.get(cacheKey);
   if (cached) {
-    console.log(`✅ [fetchDirections] Cache HIT! Returning ${cached.coordinates.length} cached coordinates`);
     return cached;
   }
-  console.log(`❌ [fetchDirections] Cache MISS - will fetch from API`);
 
   if (!GOOGLE_MAPS_API_KEY) {
-    console.error('❌ Google Maps API key not configured - cannot fetch directions');
+    logger.error('❌ Google Maps API key not configured - cannot fetch directions');
     return null;
   }
 
@@ -184,19 +183,18 @@ export async function fetchDirections(
 
   const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${originStr}&destination=${destinationStr}&mode=${mode}&key=${GOOGLE_MAPS_API_KEY}`;
 
-  console.log(`🔍 [fetchDirections] 🌐 Fetching ${mode} directions: ${originStr} -> ${destinationStr}`);
-  console.log(`🔍 [fetchDirections] URL: ${url.substring(0, 100)}...`);
+  logger.debug(`🔍 [fetchDirections] 🌐 Fetching ${mode} directions: ${originStr} -> ${destinationStr}`);
 
   // Create combined AbortController with timeout and external signal
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
-    console.error(`❌ [fetchDirections] Fetch timeout after 15s - aborting`);
+    logger.error(`❌ [fetchDirections] Fetch timeout after 15s - aborting`);
     controller.abort();
-  }, 15000); // 15 second timeout (generous for mobile networks)
+  }, FETCH_TIMEOUT_MS);
 
   // Listen to external abort signal with cleanup
   const onExternalAbort = () => {
-    console.log('🚫 [fetchDirections] External cancellation signal received');
+    logger.debug('🚫 [fetchDirections] External cancellation signal received');
     controller.abort();
   };
   if (signal) {
@@ -204,83 +202,64 @@ export async function fetchDirections(
   }
 
   try {
-    console.log(`🔍 [fetchDirections] Calling fetch with abort controller...`);
 
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, { signal: controller.signal, headers: GOOGLE_APP_IDENTITY_HEADERS });
 
     clearTimeout(timeoutId); // Clear timeout on success
     if (signal) signal.removeEventListener('abort', onExternalAbort);
-    console.log(`🔍 [fetchDirections] Fetch completed, status: ${response.status}`);
 
     if (!response.ok) {
-      console.error(`❌ [fetchDirections] HTTP error: ${response.status} ${response.statusText}`);
+      logger.error(`❌ [fetchDirections] HTTP error: ${response.status} ${response.statusText}`);
       return null;
     }
-
-    console.log(`🔍 [fetchDirections] Parsing JSON...`);
     let data: DirectionsResponse;
     try {
       data = await response.json();
-      console.log(`🔍 [fetchDirections] JSON parsed successfully`);
     } catch (jsonError) {
-      console.error(`❌ [fetchDirections] JSON parse error:`, jsonError);
-      console.error(`❌ [fetchDirections] Response text:`, await response.text().catch(() => 'Could not read text'));
+      logger.error(`❌ [fetchDirections] JSON parse error:`, jsonError);
+      logger.error(`❌ [fetchDirections] Response text:`, await response.text().catch(() => 'Could not read text'));
       return null;
     }
 
-    console.log(`🔍 [fetchDirections] API response status: ${data.status}`);
-
     if (data.status !== 'OK') {
-      console.warn(`⚠️ [fetchDirections] Directions API error: ${data.status}`, data.error_message);
+      logger.warn(`⚠️ [fetchDirections] Directions API error: ${data.status}`, data.error_message);
       return null;
     }
 
     if (!data.routes || data.routes.length === 0) {
-      console.warn('⚠️ [fetchDirections] No routes found in response');
+      logger.warn('⚠️ [fetchDirections] No routes found in response');
       return null;
     }
 
     const route = data.routes[0];
-    console.log(`🔍 [fetchDirections] Route found, has ${route.legs?.length || 0} legs`);
 
     if (!route.overview_polyline || !route.overview_polyline.points) {
-      console.error(`❌ [fetchDirections] No polyline in route response`);
+      logger.error(`❌ [fetchDirections] No polyline in route response`);
       return null;
     }
 
     const polyline = route.overview_polyline.points;
-    console.log(`🔍 [fetchDirections] Polyline length: ${polyline.length} chars`);
-    console.log(`🔍 [fetchDirections] Decoding polyline...`);
 
     let coordinates: RouteCoordinate[];
     try {
       coordinates = decodePolyline(polyline);
-      console.log(`🔍 [fetchDirections] Decoded ${coordinates.length} coordinates`);
     } catch (decodeError) {
-      console.error(`❌ [fetchDirections] Polyline decode error:`, decodeError);
-      console.error(`❌ [fetchDirections] Polyline sample:`, polyline.substring(0, 100));
+      logger.error(`❌ [fetchDirections] Polyline decode error:`, decodeError);
+      logger.error(`❌ [fetchDirections] Polyline sample:`, polyline.substring(0, 100));
       return null;
     }
 
     // Validate decoded coordinates
-    const invalidCoords = coordinates.filter(c =>
-      typeof c.latitude !== 'number' ||
-      typeof c.longitude !== 'number' ||
-      isNaN(c.latitude) ||
-      isNaN(c.longitude) ||
-      c.latitude === 0 ||
-      c.longitude === 0
-    );
+    const invalidCoords = coordinates.filter((c) => !isValidCoordinateObject(c));
 
     if (invalidCoords.length > 0) {
-      console.error(`❌ [fetchDirections] ${invalidCoords.length} invalid coordinates after decoding!`);
-      console.error(`❌ [fetchDirections] First invalid:`, invalidCoords[0]);
+      logger.error(`❌ [fetchDirections] ${invalidCoords.length} invalid coordinates after decoding!`);
+      logger.error(`❌ [fetchDirections] First invalid:`, invalidCoords[0]);
       return null;
     }
 
     // Extract distance and duration from first leg
     const leg = route.legs[0];
-    console.log(`🔍 [fetchDirections] Leg distance: ${leg?.distance?.text}, duration: ${leg?.duration?.text}`);
 
     const result: DirectionsResult = {
       coordinates,
@@ -290,22 +269,24 @@ export async function fetchDirections(
 
     // Cache the result
     directionsCache.set(cacheKey, result);
-    console.log(`✅ [fetchDirections] Successfully fetched and cached directions`);
 
     return result;
   } catch (error) {
     clearTimeout(timeoutId); // Clear timeout on error
     if (signal) signal.removeEventListener('abort', onExternalAbort);
-    console.error('❌ [fetchDirections] Caught error:');
-    console.error('❌ [fetchDirections] Error type:', error?.constructor?.name || typeof error);
-    console.error('❌ [fetchDirections] Error message:', error instanceof Error ? error.message : String(error));
-    console.error('❌ [fetchDirections] Error stack:', error instanceof Error ? error.stack : 'No stack');
 
-    // Handle abort error specifically
     if (error instanceof Error && error.name === 'AbortError') {
-      console.error('❌ [fetchDirections] Request was aborted due to timeout');
+      // Caller cancelled (e.g. the route changed while fetching): propagate so
+      // the whole multi-segment fetch stops instead of drawing a stale route.
+      if (signal?.aborted) {
+        throw new DOMException('Operation cancelled', 'AbortError');
+      }
+      // Otherwise our own timeout fired; fall back to a straight line for this segment.
+      logger.warn(`[fetchDirections] Timed out after ${FETCH_TIMEOUT_MS}ms; using straight-line fallback`);
+      return null;
     }
 
+    logger.warn('[fetchDirections] Request failed:', error instanceof Error ? error.message : String(error));
     return null;
   }
 }
@@ -342,7 +323,7 @@ export async function fetchCompleteRoute(
       }
     } else {
       // Fallback: if API fails, add straight line between stops
-      console.warn(`Falling back to straight line for segment ${i} to ${i + 1}`);
+      logger.warn(`Falling back to straight line for segment ${i} to ${i + 1}`);
       if (i === 0 || allCoordinates.length === 0) {
         allCoordinates.push(origin);
       }
@@ -366,44 +347,32 @@ export async function fetchCompleteRouteWithSegments(
   modes: TravelMode[],
   signal?: AbortSignal
 ): Promise<RouteSegment[]> {
-  console.log('🔍 [GoogleDirections] START fetchCompleteRouteWithSegments');
-  console.log(`🔍 [GoogleDirections] Stops: ${stops.length}, Modes: ${modes.length}`);
 
   // Check if already cancelled
   if (signal?.aborted) {
-    console.log('🚫 [GoogleDirections] Already cancelled before starting');
+    logger.debug('🚫 [GoogleDirections] Already cancelled before starting');
     throw new DOMException('Operation cancelled', 'AbortError');
   }
 
-  // Log all input coordinates
-  for (let i = 0; i < stops.length; i++) {
-    console.log(`🔍 [GoogleDirections] Stop ${i + 1}: lat=${stops[i].latitude}, lon=${stops[i].longitude}`);
-  }
-  console.log('🔍 [GoogleDirections] Modes:', modes);
-
   if (stops.length < 2) {
-    console.log('🔍 [GoogleDirections] Less than 2 stops, returning empty');
     return [];
   }
 
   // Validate coordinates
   for (let i = 0; i < stops.length; i++) {
     const stop = stops[i];
-    if (!stop.latitude || !stop.longitude || isNaN(stop.latitude) || isNaN(stop.longitude) ||
-        stop.latitude === 0 || stop.longitude === 0) {
-      console.error(`❌ [GoogleDirections] Stop ${i + 1} has invalid coordinates: (${stop.latitude}, ${stop.longitude})`);
+    if (!isValidCoordinateObject(stop)) {
+      logger.error(`❌ [GoogleDirections] Stop ${i + 1} has invalid coordinates: (${stop.latitude}, ${stop.longitude})`);
       throw new Error(`Stop ${i + 1} has invalid coordinates: (${stop.latitude}, ${stop.longitude})`);
     }
   }
 
   if (modes.length !== stops.length - 1) {
     const errorMsg = `Modes array length mismatch: expected ${stops.length - 1} (stops.length - 1), got ${modes.length}`;
-    console.error('❌ [GoogleDirections]', errorMsg);
-    console.error(`   Stops: ${stops.length}, Modes: ${modes.length}`);
+    logger.error('❌ [GoogleDirections]', errorMsg);
+    logger.error(`   Stops: ${stops.length}, Modes: ${modes.length}`);
     throw new Error(errorMsg);
   }
-
-  console.log('✅ [GoogleDirections] All validations passed, fetching directions...');
   const segments: RouteSegment[] = [];
 
   // Fetch directions for each consecutive stop pair
@@ -411,7 +380,7 @@ export async function fetchCompleteRouteWithSegments(
   for (let i = 0; i < stops.length - 1; i++) {
     // Check if cancelled before each segment
     if (signal?.aborted) {
-      console.log('🚫 [GoogleDirections] Optimization cancelled during segment fetch');
+      logger.debug('🚫 [GoogleDirections] Optimization cancelled during segment fetch');
       throw new DOMException('Operation cancelled', 'AbortError');
     }
 
@@ -419,37 +388,29 @@ export async function fetchCompleteRouteWithSegments(
     const destination = stops[i + 1];
     const mode = modes[i];
 
-    console.log(`   Segment ${i + 1}/${stops.length - 1}: ${mode} from (${origin.latitude.toFixed(4)}, ${origin.longitude.toFixed(4)}) to (${destination.latitude.toFixed(4)}, ${destination.longitude.toFixed(4)})`);
-
     // Check if this request will hit cache
     const cacheKey = getCacheKey(origin, destination, mode);
     const willHitCache = directionsCache.has(cacheKey);
-    console.log(`   📦 Cache status: ${willHitCache ? 'HIT (no delay needed)' : 'MISS (will fetch)'}`);
 
     // Add delay between API calls ONLY if we'll actually fetch (not cached)
     // This prevents rate limiting while allowing cached requests to proceed immediately
     if (!willHitCache && i > 0) {
       const timeSinceLastFetch = Date.now() - lastFetchTime;
-      if (timeSinceLastFetch < 500) {
-        const delayNeeded = 500 - timeSinceLastFetch;
-        console.log(`   ⏱️ Waiting ${delayNeeded}ms before next API call to prevent rate limiting...`);
+      if (timeSinceLastFetch < MIN_FETCH_INTERVAL_MS) {
+        const delayNeeded = MIN_FETCH_INTERVAL_MS - timeSinceLastFetch;
         await new Promise(resolve => setTimeout(resolve, delayNeeded));
-        console.log(`   ✅ Delay completed`);
       }
     }
-
-    console.log(`   🔍 Calling fetchDirections for segment ${i + 1}...`);
 
     let result: DirectionsResult | null = null;
     try {
       result = await fetchDirections(origin, destination, mode, signal);
-      console.log(`   🔍 fetchDirections returned for segment ${i + 1}`);
     } catch (segmentError) {
       // Re-throw AbortErrors — entire operation must stop
       if (segmentError instanceof Error && segmentError.name === 'AbortError') {
         throw segmentError;
       }
-      console.error(`❌ [GoogleDirections] Segment ${i + 1} failed:`, segmentError);
+      logger.error(`❌ [GoogleDirections] Segment ${i + 1} failed:`, segmentError);
       // Continue with fallback straight line for this segment
       result = null;
     }
@@ -460,17 +421,13 @@ export async function fetchCompleteRouteWithSegments(
     }
 
     if (result && result.coordinates.length > 0) {
-      console.log(`   ✅ Segment ${i + 1}: ${result.coordinates.length} coordinates`);
 
       // Validate returned coordinates
-      const invalidCoords = result.coordinates.filter(c =>
-        !c.latitude || !c.longitude || isNaN(c.latitude) || isNaN(c.longitude) ||
-        c.latitude === 0 || c.longitude === 0
-      );
+      const invalidCoords = result.coordinates.filter((c) => !isValidCoordinateObject(c));
 
       if (invalidCoords.length > 0) {
-        console.error(`❌ [GoogleDirections] Segment ${i + 1} has ${invalidCoords.length} invalid coordinates from API!`);
-        console.error('❌ [GoogleDirections] Invalid coords:', invalidCoords);
+        logger.error(`❌ [GoogleDirections] Segment ${i + 1} has ${invalidCoords.length} invalid coordinates from API!`);
+        logger.error('❌ [GoogleDirections] Invalid coords:', invalidCoords);
         throw new Error(`Segment ${i + 1} contains invalid coordinates from Google Directions API`);
       }
 
@@ -485,7 +442,7 @@ export async function fetchCompleteRouteWithSegments(
       });
     } else {
       // Fallback: if API fails, add straight line between stops
-      console.warn(`   ⚠️ Falling back to straight line for segment ${i} to ${i + 1}`);
+      logger.warn(`   ⚠️ Falling back to straight line for segment ${i} to ${i + 1}`);
       segments.push({
         id: `segment-${i}`,
         startStop: i + 1,
@@ -497,9 +454,6 @@ export async function fetchCompleteRouteWithSegments(
       });
     }
   }
-
-  console.log(`🔍 [GoogleDirections] Completed successfully with ${segments.length} segments`);
-  console.log('🔍 [GoogleDirections] END fetchCompleteRouteWithSegments');
   return segments;
 }
 

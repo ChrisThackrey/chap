@@ -1,16 +1,51 @@
 import OpenAI from 'openai';
 
-export const openai = new OpenAI({
-  apiKey: process.env.EXPO_PUBLIC_OPENAI_API_KEY,
-  dangerouslyAllowBrowser: true, // Required for React Native/Expo environment
-});
+const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
 
 export const MODEL = 'gpt-4o';
 export const FALLBACK_MODEL = 'gpt-4o-mini';
 
 // Web search configuration from environment
 export const WEB_SEARCH_ENABLED = process.env.EXPO_PUBLIC_ENABLE_WEB_SEARCH !== 'false';
-export const WEB_SEARCH_TRIGGER_MODE = (process.env.EXPO_PUBLIC_WEB_SEARCH_TRIGGER_MODE || 'auto') as 'auto' | 'always' | 'never';
+export const WEB_SEARCH_TRIGGER_MODE = (process.env.EXPO_PUBLIC_WEB_SEARCH_TRIGGER_MODE || 'auto') as
+  | 'auto'
+  | 'always'
+  | 'never';
+
+/** True when an OpenAI API key has been provided via EXPO_PUBLIC_OPENAI_API_KEY. */
+export function isOpenAIConfigured(): boolean {
+  return typeof OPENAI_API_KEY === 'string' && OPENAI_API_KEY.trim().length > 0;
+}
+
+export class OpenAINotConfiguredError extends Error {
+  constructor() {
+    super('OpenAI API key is not configured. Add EXPO_PUBLIC_OPENAI_API_KEY to your .env file and restart the dev server.');
+    this.name = 'OpenAINotConfiguredError';
+  }
+}
+
+let client: OpenAI | null = null;
+
+/**
+ * Lazily construct the OpenAI client.
+ *
+ * The SDK constructor throws when no API key is present. Creating the client at
+ * module load time meant that a missing `.env` crashed the entire app on launch
+ * (the route planner tab imports this module). Deferring construction turns
+ * that into a recoverable, user-facing error at generation time instead.
+ */
+export function getOpenAIClient(): OpenAI {
+  if (!isOpenAIConfigured()) {
+    throw new OpenAINotConfiguredError();
+  }
+  if (!client) {
+    client = new OpenAI({
+      apiKey: OPENAI_API_KEY,
+      dangerouslyAllowBrowser: true, // Required for React Native/Expo environment
+    });
+  }
+  return client;
+}
 
 /**
  * Location context for web search user_location parameter
@@ -53,26 +88,40 @@ export interface ResponsesAPIOptions {
   };
 }
 
+interface ResponsesAnnotation {
+  type?: string;
+  url?: string;
+  title?: string;
+  start_index?: number;
+  end_index?: number;
+}
+
+interface ResponsesOutputItem {
+  type?: string;
+  content?: {
+    type?: string;
+    annotations?: ResponsesAnnotation[];
+  }[];
+}
+
 /**
  * Extract URL citations from Responses API output
  */
-function extractUrlCitations(output: any[]): WebSearchCitation[] {
+function extractUrlCitations(output: ResponsesOutputItem[]): WebSearchCitation[] {
   const citations: WebSearchCitation[] = [];
 
   for (const item of output) {
-    if (item.type === 'message' && item.content) {
-      for (const content of item.content) {
-        if (content.type === 'output_text' && content.annotations) {
-          for (const annotation of content.annotations) {
-            if (annotation.type === 'url_citation') {
-              citations.push({
-                url: annotation.url,
-                title: annotation.title,
-                startIndex: annotation.start_index,
-                endIndex: annotation.end_index,
-              });
-            }
-          }
+    if (item.type !== 'message' || !item.content) continue;
+    for (const content of item.content) {
+      if (content.type !== 'output_text' || !content.annotations) continue;
+      for (const annotation of content.annotations) {
+        if (annotation.type === 'url_citation' && annotation.url) {
+          citations.push({
+            url: annotation.url,
+            title: annotation.title,
+            startIndex: annotation.start_index ?? 0,
+            endIndex: annotation.end_index ?? 0,
+          });
         }
       }
     }
@@ -81,28 +130,37 @@ function extractUrlCitations(output: any[]): WebSearchCitation[] {
   return citations;
 }
 
+export class ResponsesAPIError extends Error {
+  statusCode: number;
+
+  constructor(statusCode: number, body: string) {
+    super(`Responses API error: ${statusCode} - ${body}`);
+    this.name = 'ResponsesAPIError';
+    this.statusCode = statusCode;
+  }
+}
+
 /**
  * Create a response using the Responses API with optional web search
- * Falls back to direct fetch if SDK doesn't support responses endpoint
+ * Uses direct fetch since the installed SDK does not expose the Responses endpoint.
  */
 export async function createResponseWithSearch(
   options: ResponsesAPIOptions
 ): Promise<ResponsesAPIResult> {
+  if (!isOpenAIConfigured()) {
+    throw new OpenAINotConfiguredError();
+  }
+
   const { input, locationContext, enableWebSearch = true, jsonSchema } = options;
 
-  // Build the request body
   const requestBody: Record<string, unknown> = {
     model: MODEL,
     input,
   };
 
-  // Add web search tool if enabled
   if (enableWebSearch && WEB_SEARCH_ENABLED) {
-    const webSearchTool: Record<string, unknown> = {
-      type: 'web_search',
-    };
+    const webSearchTool: Record<string, unknown> = { type: 'web_search' };
 
-    // Add location context if provided
     if (locationContext && (locationContext.city || locationContext.region)) {
       webSearchTool.user_location = {
         type: 'approximate',
@@ -115,7 +173,6 @@ export async function createResponseWithSearch(
     requestBody.tools = [webSearchTool];
   }
 
-  // Add JSON schema format if provided
   if (jsonSchema) {
     requestBody.text = {
       format: {
@@ -127,36 +184,26 @@ export async function createResponseWithSearch(
     };
   }
 
-  // Use direct fetch since SDK may not support Responses API yet
   const response = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${process.env.EXPO_PUBLIC_OPENAI_API_KEY}`,
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(requestBody),
   });
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    const error = new Error(`Responses API error: ${response.status} - ${errorBody}`);
-    (error as any).statusCode = response.status;
-    (error as any).name = 'ResponsesAPIError';
-    throw error;
+    const errorBody = await response.text().catch(() => '');
+    throw new ResponsesAPIError(response.status, errorBody);
   }
 
   const data = await response.json();
-
-  // Extract output text and citations
-  const outputText = data.output_text || '';
-  const citations = extractUrlCitations(data.output || []);
-  const webSearchUsed = data.output?.some((item: any) =>
-    item.type === 'web_search_call'
-  ) || false;
+  const output: ResponsesOutputItem[] = Array.isArray(data.output) ? data.output : [];
 
   return {
-    outputText,
-    citations,
-    webSearchUsed,
+    outputText: typeof data.output_text === 'string' ? data.output_text : '',
+    citations: extractUrlCitations(output),
+    webSearchUsed: output.some((item) => item.type === 'web_search_call'),
   };
 }

@@ -5,6 +5,8 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
+  Platform,
+  Pressable,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
@@ -33,7 +35,9 @@ export function NavigationAppSelectorModal({
   const colors = Colors[colorScheme];
   const mapColors = useMapColors();
   const insets = useSafeAreaInsets();
-  const [selectedApp, setSelectedApp] = useState<NavigationApp>('apple');
+  // Apple Maps only exists on iOS; default Android to Google Maps.
+  const supportsAppleMaps = Platform.OS === 'ios';
+  const [selectedApp, setSelectedApp] = useState<NavigationApp>(supportsAppleMaps ? 'apple' : 'google');
 
   const handleSend = useCallback(() => {
     onSelect(selectedApp);
@@ -49,15 +53,11 @@ export function NavigationAppSelectorModal({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <TouchableOpacity
-        style={styles.overlay}
-        activeOpacity={1}
-        onPress={onClose}
-      >
-        <TouchableOpacity
-          activeOpacity={1}
-          onPress={(e) => e.stopPropagation()}
-        >
+      {/* Backdrop: tapping outside the sheet dismisses it. Not an accessibility
+          element itself so the sheet's controls stay reachable to screen readers. */}
+      <Pressable style={styles.overlay} onPress={onClose} accessible={false}>
+        {/* Inner Pressable swallows taps so they don't dismiss the sheet */}
+        <Pressable onPress={() => {}} accessible={false}>
           <ThemedView style={[styles.modal, { backgroundColor: colors.background }]}>
             {/* Header */}
             <View style={styles.header}>
@@ -77,6 +77,7 @@ export function NavigationAppSelectorModal({
             {/* Selection Options */}
             <View style={styles.optionsContainer}>
               {/* Apple Maps Option */}
+              {supportsAppleMaps && (
               <TouchableOpacity
                 style={[
                   styles.optionButton,
@@ -103,6 +104,7 @@ export function NavigationAppSelectorModal({
                   {selectedApp === 'apple' && <View style={styles.radioInner} />}
                 </View>
               </TouchableOpacity>
+              )}
 
               {/* Google Maps Option */}
               <TouchableOpacity
@@ -166,8 +168,8 @@ export function NavigationAppSelectorModal({
               </TouchableOpacity>
             </View>
           </ThemedView>
-        </TouchableOpacity>
-      </TouchableOpacity>
+        </Pressable>
+      </Pressable>
     </Modal>
   );
 }

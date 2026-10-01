@@ -1,4 +1,4 @@
-import { Modal, View, TouchableOpacity, StyleSheet, Linking, Platform, ScrollView, Dimensions, ActivityIndicator, Alert } from 'react-native';
+import { Modal, View, TouchableOpacity, StyleSheet, Linking, Platform, ScrollView, ActivityIndicator, Alert, useWindowDimensions } from 'react-native';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
@@ -9,12 +9,12 @@ import { Colors } from '@/constants/theme';
 import { useMapColors } from '@/hooks/use-map-colors';
 import { RouteStop } from '@/types/route';
 import { getStopIcon } from '@/constants/stop-icons';
-import { buildDisplayPhotoUrl } from '@/lib/google-places';
+import { buildDisplayPhotoSource } from '@/lib/google-places';
 import { VenueHours } from './venue-hours';
 import { VenueTips } from './venue-tips';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const HERO_IMAGE_HEIGHT = 180;
+const MIN_STOPS_PER_ROUTE = 2;
 
 /**
  * Parse address string into components
@@ -46,54 +46,48 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
   const colors = Colors[colorScheme];
   const mapColors = useMapColors();
   const insets = useSafeAreaInsets();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
   // Safe area padding inside the modal (for home indicator)
   const bottomPadding = Math.max(20, insets.bottom);
 
   // Calculate max modal height (90% of screen - extends higher for better visibility)
-  const maxModalHeight = SCREEN_HEIGHT * 0.90;
-
-  // Debug logging
-  console.log('🔍 [StopDetailModal] Rendering modal');
-  console.log('   Stop:', stop?.name);
-  console.log('   Total stops:', totalStops);
-  console.log('   Remove button enabled:', !!onRemoveStop && totalStops > 2);
-  console.log('   Is removing:', isRemovingStop);
+  const maxModalHeight = screenHeight * 0.9;
 
   if (!stop) return null;
 
   const iconConfig = getStopIcon(stop.type);
-  const addressParts = parseAddress(stop.address);
+  const addressParts = parseAddress(stop.address || '');
   const heroPhoto = stop.venueDetails?.photos?.[0];
   const additionalPhotos = stop.venueDetails?.photos?.slice(1) || [];
+  const canRemove = !!onRemoveStop && totalStops > MIN_STOPS_PER_ROUTE;
 
-  const handleGetDirections = () => {
-    const address = encodeURIComponent(stop.address);
-    const url =
+  const handleGetDirections = async () => {
+    // Prefer coordinates over the free-text address so the maps app lands on the exact pin.
+    const query = encodeURIComponent(stop.address || stop.name);
+    const nativeUrl =
       Platform.OS === 'ios'
-        ? `maps://maps.apple.com/?q=${address}`
-        : `geo:0,0?q=${address}`;
+        ? `maps://?q=${query}&ll=${stop.latitude},${stop.longitude}`
+        : `geo:${stop.latitude},${stop.longitude}?q=${stop.latitude},${stop.longitude}(${query})`;
+    const webUrl = `https://www.google.com/maps/search/?api=1&query=${stop.latitude},${stop.longitude}`;
 
-    Linking.openURL(url).catch(() => {
-      // Fallback to Google Maps web
-      Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${address}`);
-    });
+    try {
+      await Linking.openURL(nativeUrl);
+    } catch {
+      try {
+        await Linking.openURL(webUrl);
+      } catch (error) {
+        console.error('Unable to open maps:', error);
+        Alert.alert('Unable to Open Maps', 'No maps app could be opened on this device.');
+      }
+    }
   };
 
   const handleRemoveStop = async () => {
-    console.log('🗑️ [StopDetailModal] Remove button tapped');
-    console.log('   Stop:', stop?.name);
-    console.log('   Total stops:', totalStops);
-    console.log('   Can remove:', totalStops > 2);
+    if (!onRemoveStop || !stop) return;
 
-    if (!onRemoveStop || !stop) {
-      console.log('❌ [StopDetailModal] No onRemoveStop handler or no stop');
-      return;
-    }
-
-    // Prevent removing if it would leave less than 2 stops
-    if (totalStops <= 2) {
-      console.log('❌ [StopDetailModal] Cannot remove - minimum stops required');
+    // Prevent removing if it would leave less than the minimum number of stops
+    if (totalStops <= MIN_STOPS_PER_ROUTE) {
       Alert.alert(
         'Cannot Remove Stop',
         'A route must have at least 2 stops. Add more stops before removing this one.',
@@ -148,7 +142,7 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
             {heroPhoto && (
               <View style={styles.heroImageContainer}>
                 <Image
-                  source={{ uri: buildDisplayPhotoUrl(heroPhoto, `${Math.round(SCREEN_WIDTH)}x${HERO_IMAGE_HEIGHT * 2}`) }}
+                  source={buildDisplayPhotoSource(heroPhoto, `${Math.round(screenWidth)}x${HERO_IMAGE_HEIGHT * 2}`)}
                   style={styles.heroImage}
                   contentFit="cover"
                   transition={200}
@@ -158,7 +152,7 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
                 {/* Header buttons overlay */}
                 <View style={styles.heroButtonsContainer}>
                   {/* Remove button - Left side */}
-                  {onRemoveStop && totalStops > 2 && (
+                  {canRemove && (
                     <TouchableOpacity
                       style={styles.removeButtonHero}
                       onPress={handleRemoveStop}
@@ -188,15 +182,11 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
             {!heroPhoto && (
               <View style={styles.header}>
                 <View style={[styles.iconBadge, { backgroundColor: iconConfig.color }]}>
-                  <IconSymbol
-                    name={iconConfig.ios as any}
-                    size={32}
-                    color="#FFFFFF"
-                  />
+                  <IconSymbol name={iconConfig.icon} size={32} color="#FFFFFF" />
                 </View>
                 <View style={styles.headerButtons}>
                   {/* Remove button */}
-                  {onRemoveStop && totalStops > 2 && (
+                  {canRemove && (
                     <TouchableOpacity
                       style={[styles.removeButtonHeader, colorScheme === 'dark' && { backgroundColor: 'rgba(220, 38, 38, 0.12)' }]}
                       onPress={handleRemoveStop}
@@ -227,7 +217,7 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
                 <View style={styles.titleRow}>
                   {heroPhoto && (
                     <View style={[styles.iconBadgeSmall, { backgroundColor: iconConfig.color }]}>
-                      <IconSymbol name={iconConfig.ios as any} size={20} color="#FFFFFF" />
+                      <IconSymbol name={iconConfig.icon} size={20} color="#FFFFFF" />
                     </View>
                   )}
                   <View style={styles.titleContainer}>
@@ -243,7 +233,7 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
                 {/* Rating & Price Row */}
                 {stop.venueDetails && (stop.venueDetails.rating || stop.venueDetails.price) && (
                   <View style={styles.ratingRow}>
-                    {stop.venueDetails.rating !== undefined && (
+                    {typeof stop.venueDetails.rating === 'number' && Number.isFinite(stop.venueDetails.rating) && (
                       <View style={[styles.ratingBadge, { backgroundColor: stop.venueDetails.ratingColor || '#666' }]}>
                         <ThemedText style={styles.ratingText}>
                           {stop.venueDetails.rating.toFixed(1)}
@@ -251,13 +241,13 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
                         <ThemedText style={styles.ratingLabel}>/10</ThemedText>
                       </View>
                     )}
-                    {stop.venueDetails.price !== undefined && (
+                    {typeof stop.venueDetails.price === 'number' && Number.isFinite(stop.venueDetails.price) && (
                       <View style={[styles.priceContainer, colorScheme === 'dark' && { backgroundColor: colors.surface }]}>
                         <ThemedText style={styles.priceText}>
-                          {'$'.repeat(stop.venueDetails.price)}
+                          {'$'.repeat(Math.min(4, Math.max(0, Math.round(stop.venueDetails.price))))}
                         </ThemedText>
                         <ThemedText style={styles.priceInactive}>
-                          {'$'.repeat(Math.max(0, 4 - stop.venueDetails.price))}
+                          {'$'.repeat(Math.max(0, 4 - Math.min(4, Math.max(0, Math.round(stop.venueDetails.price)))))}
                         </ThemedText>
                       </View>
                     )}
@@ -302,7 +292,7 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
                     {additionalPhotos.map((photo, index) => (
                       <Image
                         key={index}
-                        source={{ uri: buildDisplayPhotoUrl(photo, '200x150') }}
+                        source={buildDisplayPhotoSource(photo, '200x150')}
                         style={[styles.thumbnailPhoto, colorScheme === 'dark' && { backgroundColor: colors.surface }]}
                         contentFit="cover"
                         transition={200}
@@ -344,23 +334,23 @@ export function StopDetailModal({ stop, totalStops, visible, onClose, onRemoveSt
               <TouchableOpacity
                 style={[
                   styles.removeButton,
-                  (isRemovingStop || totalStops <= 2) && styles.removeButtonDisabled,
+                  (isRemovingStop || !canRemove) && styles.removeButtonDisabled,
                   colorScheme === 'dark' && { backgroundColor: 'rgba(220, 38, 38, 0.12)' }
                 ]}
                 onPress={handleRemoveStop}
                 activeOpacity={0.7}
-                disabled={isRemovingStop || !onRemoveStop || totalStops <= 2}
+                disabled={isRemovingStop || !canRemove}
               >
                 {isRemovingStop ? (
                   <ActivityIndicator size="small" color="#DC2626" />
                 ) : (
                   <>
-                    <IconSymbol name="trash" size={20} color={totalStops <= 2 ? '#9CA3AF' : '#DC2626'} />
+                    <IconSymbol name="trash" size={20} color={canRemove ? '#DC2626' : '#9CA3AF'} />
                     <ThemedText style={[
                       styles.removeButtonText,
-                      totalStops <= 2 && styles.removeButtonTextDisabled
+                      !canRemove && styles.removeButtonTextDisabled
                     ]}>
-                      {totalStops <= 2 ? 'Minimum 2 Stops Required' : 'Remove Stop'}
+                      {canRemove ? 'Remove Stop' : `Minimum ${MIN_STOPS_PER_ROUTE} Stops Required`}
                     </ThemedText>
                   </>
                 )}
