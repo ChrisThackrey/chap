@@ -28,7 +28,7 @@ eas secret:create --scope project --name OPENAI_API_KEY --value "your-api-key-he
 
 **Note:** Replace `your-api-key-here` with your actual OpenAI API key from the .env file.
 
-### 4. Build for iOS Simulator (Mac only)
+### 4. Build for a Simulated iOS Device (Mac only)
 ```bash
 eas build --platform ios --profile development
 ```
@@ -37,7 +37,7 @@ This will:
 - Build a development client for iOS
 - Take 10-20 minutes
 - Give you a downloadable .tar.gz file
-- You can install it on the iOS Simulator
+- You can install it on a simulated iOS device (Device Hub on Xcode 27+)
 
 ### 5. Build for Android
 ```bash
@@ -54,11 +54,17 @@ This will:
 
 **For iOS Simulator:**
 ```bash
-# After build completes, EAS will give you a URL
-# Download the .tar.gz file, then:
+# Easiest: download and install the latest simulator build (eas-cli 24.4.2+ on Xcode 27)
+eas build:run --platform ios --latest
+
+# Or by hand: download the .tar.gz from the EAS URL, then:
 tar -xvf path/to/downloaded-file.tar.gz
-# Drag the .app file to your iOS Simulator
+xcrun devicectl list devices                      # find the simulated device's UDID
+xcrun simctl boot <UDID>                          # boot it if it is shut down
+xcrun devicectl device install app --device <UDID> ./chap.app
+open "devices://device/open?id=<UDID>"            # show it in Device Hub
 ```
+See `IOS_SIMULATOR_GUIDE.md` for the full Device Hub command list.
 
 **For Android:**
 ```bash

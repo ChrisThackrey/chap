@@ -22,7 +22,7 @@ This is an Expo React Native application built with:
 ```bash
 npm start          # Start Expo dev server with menu
 npm run android    # Start on Android emulator
-npm run ios        # Start on iOS simulator
+npm run ios        # Build and run on a simulated iOS device (Device Hub on Xcode 27+)
 npm run web        # Start web version
 ```
 

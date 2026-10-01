@@ -1,10 +1,29 @@
-# iOS Simulator Testing Guide
+# iOS Simulated Device Testing Guide (Device Hub)
 
-## Quick Start - Two Options
+Xcode 27 replaced `Simulator.app` with **Device Hub** (`DeviceHub.app`). Simulated
+devices are still booted with `xcrun simctl`, and `xcrun devicectl` now manages
+both simulated and physical devices. On Xcode 26 and earlier, use `open -a Simulator`
+wherever this guide says `open -a DeviceHub`.
+
+**Use an iOS 26.x simulated device.** Xcode 27 builds against the iOS 27 SDK, which
+requires the UIScene lifecycle; Expo SDK 54 apps do not have it and crash at launch
+on an iOS 27 runtime (expo/expo#46664).
+
+## Quick Start - Three Options
+
+### Option 0: Run Straight From Source (Fastest Loop)
+```bash
+# Builds with Xcode, installs on a simulated device, opens Device Hub and starts Metro
+npm run ios
+
+# Pick the device (UDIDs come from `xcrun devicectl list devices`)
+npm run ios -- --device <UDID>
+```
+This needs the Expo CLI patch in `patches/`, which `npm install` applies automatically.
 
 ### Option 1: Local Build (Faster, Requires Xcode)
 ```bash
-# Build locally (what we're doing now)
+# Build locally
 eas build --platform ios --profile development --local
 
 # This creates a .tar.gz file in your project directory
@@ -32,31 +51,37 @@ tar -xvf chap-development-simulator.tar.gz
 # This creates a chap.app folder
 ```
 
-### 3. Open iOS Simulator
+### 3. Boot a Device and Open Device Hub
 ```bash
-# Open Xcode Simulator
-open -a Simulator
+# List devices; simulated ones show "simulated" in the Reality column
+xcrun devicectl list devices
 
-# Or if you have xcrun:
-xcrun simctl boot "iPhone 15 Pro"
-open -a Simulator
+# Boot a simulated device (devicectl has no boot command, so this stays simctl)
+xcrun simctl boot <UDID>
+
+# Open Device Hub focused on that device (this does not boot a shut-down device)
+open "devices://device/open?id=<UDID>"
+
+# Or just bring Device Hub forward
+open -a DeviceHub
 ```
+Quitting Device Hub shuts down the simulated devices. Its very first launch after
+installing Xcode runs a one-time updater and can take over 20 seconds.
 
 ### 4. Install the App
-**Method 1: Drag and Drop**
-- Drag the `chap.app` folder onto the iOS Simulator window
-- The app will install automatically
+**Method 1: EAS CLI**
+```bash
+# Downloads the latest simulator build and installs it (needs eas-cli 24.4.2+ on Xcode 27)
+eas build:run --platform ios --latest
+```
 
 **Method 2: Command Line**
 ```bash
-# List available simulators
-xcrun simctl list devices
+# Install on a specific device
+xcrun devicectl device install app --device <UDID> ./chap.app
 
-# Install on a specific simulator (replace UDID)
+# simctl still works, including the "booted" shortcut
 xcrun simctl install booted ./chap.app
-
-# Or install on all booted simulators
-xcrun simctl install booted chap.app
 ```
 
 ### 5. Start Development Server
@@ -69,8 +94,10 @@ npx expo start --dev-client
 ```
 
 ### 6. Open the App
-- Find "chap" on the simulator home screen
-- Tap to open
+```bash
+xcrun devicectl device process launch --device <UDID> com.thacken5.chap
+```
+- Or find "chap" on the device's home screen in Device Hub and click it
 - The app will connect to your development server automatically
 
 ## Testing Your Route Planner
@@ -154,8 +181,13 @@ cat .env
 ```
 
 **If Location Doesn't Work:**
-- In Simulator: Features → Location → Custom Location
-- Enter coordinates: 37.7749, -122.4194 (San Francisco)
+```bash
+# Set a simulated location (San Francisco); negative values need the `=` form
+xcrun devicectl device simulate location coordinate --device <UDID> --latitude 37.7749 --longitude=-122.4194
+
+# Stop simulating
+xcrun devicectl device simulate location clear --device <UDID>
+```
 
 ### Performance Tips
 
@@ -185,11 +217,20 @@ eas build:cancel
 # Clear cache and rebuild
 eas build --platform ios --profile development --clear-cache
 
-# Install on all booted simulators
-xcrun simctl install booted chap.app
+# Install the latest simulator build
+eas build:run --platform ios --latest
 ```
 
 ## Troubleshooting
+
+### "Can't determine id of Simulator app"
+The Expo CLI for SDK 54 only looks for `Simulator.app`, which Xcode 27 removed. The
+patch in `patches/@expo+cli+54.0.27.patch` teaches it about Device Hub. If you see
+this error, the patch was not applied:
+```bash
+npm install          # runs patch-package via postinstall
+npx patch-package    # or apply it directly
+```
 
 ### "Build Failed"
 Check the logs for specific errors:
@@ -209,8 +250,9 @@ eas build --platform ios --profile development --clear-cache
 xcrun simctl spawn booted log stream --predicate 'processImagePath contains "chap"'
 
 # Try clearing app data
-xcrun simctl uninstall booted com.yourname.chap
+xcrun devicectl device uninstall app --device <UDID> com.thacken5.chap
 ```
+If it crashes immediately on an iOS 27 device, switch to an iOS 26.x one (see the note at the top).
 
 ### "Cannot Connect to Dev Server"
 ```bash
@@ -223,11 +265,11 @@ npm start -- --reset-cache
 
 ### "Location Services Not Working"
 ```bash
-# Reset location permissions
-xcrun simctl privacy booted grant location com.yourname.chap
+# Grant location permission (simctl only)
+xcrun simctl privacy booted grant location com.thacken5.chap
 
-# Or set custom location in Simulator
-# Features → Location → Custom Location
+# Set a simulated location
+xcrun devicectl device simulate location coordinate --device <UDID> --latitude 37.7749 --longitude=-122.4194
 ```
 
 ### "Map is Blank"
@@ -258,26 +300,31 @@ eas build --platform ios --profile preview
 # Share the downloaded .ipa file
 ```
 
-## Useful Simulator Commands
+## Useful Device Commands
+
+`devicectl` takes a device UDID or name with `--device`; it has no `booted` shortcut.
 
 ```bash
-# List all simulators
-xcrun simctl list devices
+# List all devices (simulated and physical)
+xcrun devicectl list devices
 
-# Boot a specific simulator
-xcrun simctl boot "iPhone 15 Pro"
+# Boot a specific simulated device
+xcrun simctl boot <UDID>
 
 # Take screenshot
-xcrun simctl io booted screenshot ~/Desktop/screenshot.png
+xcrun devicectl device capture screenshot --device <UDID> --destination ~/Desktop/screenshot.png
 
-# Record video
-xcrun simctl io booted recordVideo ~/Desktop/demo.mov
+# Record video (must be .mp4; add --duration <seconds> or stop with Ctrl+C)
+xcrun devicectl device capture screen-record --device <UDID> --destination ~/Desktop/demo.mp4
 
-# Open URL in simulator
-xcrun simctl openurl booted "https://example.com"
+# Open URL on the device
+xcrun devicectl device process openURL --device <UDID> "https://example.com"
 
-# Reset simulator (clear all data)
-xcrun simctl erase booted
+# List installed apps
+xcrun devicectl device info apps --device <UDID>
+
+# Reset the device (clear all data)
+xcrun simctl erase <UDID>
 ```
 
 ---

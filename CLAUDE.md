@@ -18,7 +18,7 @@ This is an Expo React Native application named "chap" using:
 npm start                 # Start Expo development server
 npx expo start           # Alternative command
 npm run android          # Run on Android emulator
-npm run ios              # Run on iOS simulator
+npm run ios              # Build and run on a simulated iOS device (Device Hub on Xcode 27+)
 npm run web              # Run web version
 ```
 
@@ -86,6 +86,10 @@ import { Colors } from '@/constants/theme';
 - `app.config.js` extends `app.json` and injects `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` into the native map SDK config. Never put API keys in `app.json`; the key must be in `.env` (or the EAS profile env) whenever `expo prebuild` / `expo run:*` / EAS builds run.
 - `ios/` and `android/` are generated (`expo prebuild`) and git-ignored.
 - `plugins/with-ios-pod-deployment-target.js` raises pod `IPHONEOS_DEPLOYMENT_TARGET` to 15.1 in the Podfile post_install; Xcode 26+ refuses to build several transitive pods otherwise.
+- Xcode 27 replaced `Simulator.app` with Device Hub (`DeviceHub.app`, `com.apple.dt.Devices`). `patches/@expo+cli+54.0.27.patch` (applied by `patch-package` on `postinstall`) ports expo/expo#50250 so `expo run:ios` / `expo start` find and open Device Hub; without it they fail with "Can't determine id of Simulator app". It also counts the `DevicesTrampoline` process (Device Hub's slow first launch) as running, which upstream does not. Delete the patch once `@expo/cli` for SDK 54 ships the fix or the project moves to SDK 56+.
+- npm 12 blocks URL dependencies, so `npx patch-package @expo/cli` cannot regenerate the patch (`EALLOWREMOTE`); rebuild it with `git diff` against `npm pack @expo/cli@<version>` instead.
+- `simctl` still boots simulated devices; `devicectl` handles install/launch/screenshots for simulated and physical devices. Command reference: `IOS_SIMULATOR_GUIDE.md`.
+- Run on iOS 26.x simulated devices: Xcode 27 builds against the iOS 27 SDK, and without a UIScene manifest (SDK 57+ only) the app crashes at launch on an iOS 27 runtime.
 
 ## Platform Support
 - **iOS**: Supports tablets, uses SF Symbols for icons (via IconSymbol component)
