@@ -232,6 +232,15 @@ npm install          # runs patch-package via postinstall
 npx patch-package    # or apply it directly
 ```
 
+### App launches but no device window appears in Device Hub
+Device Hub keeps running after its device window is closed, and activating the app does
+not bring the window back. The patch makes `npm run ios` send the device deep link on
+every launch, so this should not happen; if it does, re-apply the patch (above) or open
+the window by hand:
+```bash
+open "devices://device/open?id=$(xcrun simctl list devices booted | grep -oE '[0-9A-F-]{36}' | head -1)"
+```
+
 ### "Build Failed"
 Check the logs for specific errors:
 ```bash

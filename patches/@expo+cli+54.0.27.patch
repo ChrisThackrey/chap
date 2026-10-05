@@ -64,30 +64,51 @@ index 886f915..e0da60a 100644
          debug(`Simulator app id: ${result}`);
          try {
 diff --git a/node_modules/@expo/cli/build/src/start/platforms/ios/AppleDeviceManager.js b/node_modules/@expo/cli/build/src/start/platforms/ios/AppleDeviceManager.js
-index 725db8a..f4f2d16 100644
+index 725db8a..2cae000 100644
 --- a/node_modules/@expo/cli/build/src/start/platforms/ios/AppleDeviceManager.js
 +++ b/node_modules/@expo/cli/build/src/start/platforms/ios/AppleDeviceManager.js
-@@ -269,7 +269,14 @@ class AppleDeviceManager extends _DeviceManager.DeviceManager {
+@@ -268,8 +268,21 @@ class AppleDeviceManager extends _DeviceManager.DeviceManager {
+     }
      async activateWindowAsync() {
          await (0, _ensureSimulatorAppRunning.ensureSimulatorAppRunningAsync)(this.device);
-         // TODO: Focus the individual window
+-        // TODO: Focus the individual window
 -        await _osascript().execAsync(`tell application "Simulator" to activate`);
 +        // Xcode 27 replaces Simulator with DeviceHub (ported from expo/expo#50250).
-+        await _osascript().spawnAsync([
++        const { stdout } = await _osascript().spawnAsync([
 +            `if application "Simulator" is running then`,
 +            `tell application "Simulator" to activate`,
 +            `else if application "DeviceHub" is running then`,
 +            `tell application "DeviceHub" to activate`,
++            `return "DeviceHub"`,
 +            `end if`
 +        ]);
++        // DeviceHub keeps running after its device window is closed, and activating it does not
++        // bring the window back, so the app would launch on a device nobody can see. The deep
++        // link (re)opens and focuses this device's window; it is a no-op if already open.
++        if (stdout.trim() === 'DeviceHub') {
++            await (0, _ensureSimulatorAppRunning.openDeviceHubAsync)(this.device);
++        }
      }
      getExpoGoAppId() {
          return EXPO_GO_BUNDLE_IDENTIFIER;
 diff --git a/node_modules/@expo/cli/build/src/start/platforms/ios/ensureSimulatorAppRunning.js b/node_modules/@expo/cli/build/src/start/platforms/ios/ensureSimulatorAppRunning.js
-index 31296bc..552713d 100644
+index 31296bc..5a26c8b 100644
 --- a/node_modules/@expo/cli/build/src/start/platforms/ios/ensureSimulatorAppRunning.js
 +++ b/node_modules/@expo/cli/build/src/start/platforms/ios/ensureSimulatorAppRunning.js
-@@ -95,7 +95,10 @@ async function waitForSimulatorAppToStart({ maxWaitTime } = {}) {
+@@ -8,6 +8,12 @@ Object.defineProperty(exports, "ensureSimulatorAppRunningAsync", {
+         return ensureSimulatorAppRunningAsync;
+     }
+ });
++Object.defineProperty(exports, "openDeviceHubAsync", {
++    enumerable: true,
++    get: function() {
++        return openDeviceHubAsync;
++    }
++});
+ function _osascript() {
+     const data = /*#__PURE__*/ _interop_require_wildcard(require("@expo/osascript"));
+     _osascript = function() {
+@@ -95,7 +101,10 @@ async function waitForSimulatorAppToStart({ maxWaitTime } = {}) {
  // I think the app can be open while no simulators are booted.
  async function isSimulatorAppRunningAsync() {
      try {
@@ -99,17 +120,11 @@ index 31296bc..552713d 100644
          if (zeroMeansNo === '0') {
              return false;
          }
-@@ -108,15 +111,31 @@ async function isSimulatorAppRunningAsync() {
+@@ -108,15 +117,34 @@ async function isSimulatorAppRunningAsync() {
      return true;
  }
  async function openSimulatorAppAsync(device) {
 -    const args = [
--        '-a',
--        'Simulator'
--    ];
--    if (device.udid) {
--        // This has no effect if the app is already running.
--        args.push('--args', '-CurrentDeviceUDID', device.udid);
 +    try {
 +        const args = [
 +            '-a',
@@ -122,20 +137,28 @@ index 31296bc..552713d 100644
 +        await (0, _spawnasync().default)('open', args);
 +    } catch  {
 +        // Xcode 27+ replaces Simulator.app with DeviceHub, so `open -a Simulator` fails.
-+        // DeviceHub registers the `devices://` URL scheme, which lets us focus the right
-+        // device by its UDID; `open -a DeviceHub` can only bring the app forward.
 +        // (ported from expo/expo#50250)
-+        const deviceHubArgs = device.udid ? [
-+            `devices://device/open?id=${device.udid}`
-+        ] : [
-+            '-a',
-+            'DeviceHub'
-+        ];
-+        await (0, _spawnasync().default)('open', deviceHubArgs).catch(()=>{
-+        // Noop - we can't do much more here
-+        });
-     }
++        await openDeviceHubAsync(device);
++    }
++}
++// DeviceHub registers the `devices://` URL scheme, which lets us open and focus the right
++// device window by its UDID; `open -a DeviceHub` can only bring the app forward.
++async function openDeviceHubAsync(device) {
++    const deviceHubArgs = device.udid ? [
++        `devices://device/open?id=${device.udid}`
++    ] : [
+         '-a',
+-        'Simulator'
++        'DeviceHub'
+     ];
+-    if (device.udid) {
+-        // This has no effect if the app is already running.
+-        args.push('--args', '-CurrentDeviceUDID', device.udid);
+-    }
 -    await (0, _spawnasync().default)('open', args);
++    await (0, _spawnasync().default)('open', deviceHubArgs).catch(()=>{
++    // Noop - we can't do much more here
++    });
  }
  
  //# sourceMappingURL=ensureSimulatorAppRunning.js.map
